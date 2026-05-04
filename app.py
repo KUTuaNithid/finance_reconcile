@@ -10,81 +10,114 @@ from openpyxl.utils import get_column_letter
 import os
 
 # ==========================================
+# 0. UNIFIED CONSTANTS (SINGLE SOURCE OF TRUTH)
+# ==========================================
+# Assets
+L_CASH = "เงินสดและรายการเทียบเท่าเงินสด"
+L_AR = "ลูกหนี้การค้า"
+L_LOAN_ASSET = "เงินให้กู้ยืมแก่บุคคลที่เกี่ยวข้องกัน"
+L_OTHER_CA = "สินทรัพย์หมุนเวียนอื่น"
+L_EQUIP = "อุปกรณ์-สุทธิ (Gross)"
+L_DEP = "ค่าเสื่อมราคาสะสม"
+
+# Liabilities
+L_AP = "เจ้าหนี้การค้า"
+L_OTHER_CP = "เจ้าหนี้หมุนเวียนอื่น"
+L_LOAN_LIAB = "เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน"
+L_OTHER_CL = "หนี้สินหมุนเวียนอื่น"
+
+# Equity
+L_SHARE_CAPITAL = "ทุนเรือนหุ้น"
+L_RETAINED_EARNINGS = "กำไร(ขาดทุน)สะสม"
+
+# P&L
+L_REV_SERVICE = "รายได้จากการให้บริการ"
+L_REV_OTHER = "รายได้อื่น"
+L_COST_SERVICE = "ต้นทุนการให้บริการ"
+L_SGNA = "ค่าใช้จ่ายในการขายและบริหาร"
+L_FINANCE_COST = "ต้นทุนทางการเงิน"
+L_TAX = "ภาษีเงินได้"
+
+
+# ==========================================
 # 1. CONFIGURATION DICTIONARIES
 # ==========================================
 FS_LINE_ITEMS = {
-    # Balance Sheet — Assets (use BS Debit column = งบดุล เดบิต)
-    "เงินสดและรายการเทียบเท่าเงินสด": {"prefixes": ["111"], "keywords": ["เงินสด", "เงินฝาก"], "side": "bs_debit"},
-    "ลูกหนี้การค้า": {"prefixes": ["113"], "keywords": ["ลูกหนี้"], "side": "bs_debit"},
-    "เงินให้กู้ยืมแก่บุคคลที่เกี่ยวข้องกัน": {"prefixes": ["121"], "keywords": ["เงินให้กู้ยืม"], "side": "bs_debit"},
-    "สินทรัพย์หมุนเวียนอื่น": {"prefixes": ["115", "119", "150"], "keywords": ["ภาษีถูกหัก", "จ่ายล่วงหน้า", "ดอกเบี้ยค้างรับ"], "side": "bs_debit"},
-    "อุปกรณ์-สุทธิ (Gross)": {"prefixes": ["141"], "keywords": ["เครื่องมือ", "เครื่องจักร", "อุปกรณ์สำนักงาน"], "side": "bs_debit"},
-    "ค่าเสื่อมราคาสะสม": {"prefixes": ["142"], "keywords": ["ค่าเสื่อมราคาสะสม"], "side": "bs_credit"},
+    # Balance Sheet — Assets
+    L_CASH: {"prefixes": ["111"], "keywords": ["เงินสด", "เงินฝาก"], "side": "bs_debit"},
+    L_AR: {"prefixes": ["113"], "keywords": ["ลูกหนี้"], "side": "bs_debit"},
+    L_LOAN_ASSET: {"prefixes": ["121"], "keywords": ["เงินให้กู้ยืม"], "side": "bs_debit"},
+    L_OTHER_CA: {"prefixes": ["115", "119", "150"], "keywords": ["ภาษีถูกหัก", "จ่ายล่วงหน้า", "ดอกเบี้ยค้างรับ"], "side": "bs_debit"},
+    L_EQUIP: {"prefixes": ["141"], "keywords": ["เครื่องมือ", "เครื่องจักร", "อุปกรณ์สำนักงาน"], "side": "bs_debit"},
+    L_DEP: {"prefixes": ["142"], "keywords": ["ค่าเสื่อมราคาสะสม"], "side": "bs_credit"},
     
-    # Balance Sheet — Liabilities (use BS Credit column = งบดุล เครดิต)
-    "เจ้าหนี้การค้า": {"prefixes": ["212"], "keywords": ["เจ้าหนี้การค้า"], "side": "bs_credit"},
-    "เจ้าหนี้หมุนเวียนอื่น": {"prefixes": ["211", "2131"], "keywords": ["เจ้าหนี้", "ค้างจ่าย", "สอบบัญชี", "ทำบัญชี"], "side": "bs_credit"},
-    "หนี้สินหมุนเวียนอื่น": {"prefixes": ["2132", "2137", "2131-04"], "keywords": ["ภาษีหัก", "ภงด", "กรมสรรพากร", "ประกันสังคม", "รอนำส่ง"], "side": "bs_credit"},
-    "เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน": {"prefixes": ["2138"], "keywords": ["เงินกู้ยืม"], "side": "bs_credit"},
+    # Balance Sheet — Liabilities
+    L_AP: {"prefixes": ["212"], "keywords": ["เจ้าหนี้การค้า"], "side": "bs_credit"},
+    L_OTHER_CP: {"prefixes": ["211", "2131"], "keywords": ["เจ้าหนี้", "ค้างจ่าย", "สอบบัญชี", "ทำบัญชี"], "side": "bs_credit"},
+    L_OTHER_CL: {"prefixes": ["2132", "2137", "2131-04"], "keywords": ["ภาษีหัก", "ภงด", "กรมสรรพากร", "ประกันสังคม", "รอนำส่ง"], "side": "bs_credit"},
+    L_LOAN_LIAB: {"prefixes": ["2138"], "keywords": ["เงินกู้ยืม"], "side": "bs_credit"},
     
-    # Balance Sheet — Equity (use BS Credit column = งบดุล เครดิต)
-    "ทุนเรือนหุ้น": {"prefixes": ["31"], "keywords": ["ทุน"], "side": "bs_credit"},
-    "กำไร(ขาดทุน)สะสม": {"prefixes": ["32"], "keywords": ["กำไร"], "side": "bs_debit"},
+    # Balance Sheet — Equity
+    L_SHARE_CAPITAL: {"prefixes": ["31"], "keywords": ["ทุน"], "side": "bs_credit"},
+    L_RETAINED_EARNINGS: {"prefixes": ["32"], "keywords": ["กำไร"], "side": "bs_debit"},
     
-    # P&L — Revenue (use PL Credit column = งบกำไรขาดทุน เครดิต)
-    "รายได้จากการให้บริการ": {"prefixes": ["41"], "keywords": ["รายได้จากการ"], "side": "pl_credit"},
-    "รายได้อื่น": {"prefixes": ["42"], "keywords": ["รายได้อื่น", "ดอกเบี้ยรับ"], "side": "pl_credit"},
-    
-    # P&L — Expenses (use PL Debit column = งบกำไรขาดทุน เดบิต)
-    "ภาษีเงินได้": {"prefixes": [], "keywords": ["ภาษีเงินได้นิติบุคคล"], "side": "pl_debit"}, # Added for Tax Engine
-    "ต้นทุนการให้บริการ": {"prefixes": ["51"], "keywords": ["ต้นทุน", "ซื้อ"], "side": "pl_debit"},
-    "ค่าใช้จ่ายในการขายและบริหาร": {"prefixes": ["52", "53"], "keywords": ["ค่าใช้จ่าย", "เงินเดือน", "ค่าธรรมเนียม", "ค่าเสื่อม", "ค่าเช่า", "ประกัน", "สอบบัญชี", "บริการ"], "side": "pl_debit"},
+    # P&L — Revenue & Expenses
+    L_REV_SERVICE: {"prefixes": ["41"], "keywords": ["รายได้จากการ"], "side": "pl_credit"},
+    L_REV_OTHER: {"prefixes": ["42"], "keywords": ["รายได้อื่น", "ดอกเบี้ยรับ"], "side": "pl_credit"},
+    L_COST_SERVICE: {"prefixes": ["51", "5200-11"], "keywords": ["ต้นทุน", "ซื้อ", "ค่าจ้าง"], "side": "pl_debit"},
+    L_SGNA: {"prefixes": ["52", "53"], "keywords": ["ค่าใช้จ่าย", "เงินเดือน", "ค่าธรรมเนียม", "ค่าเสื่อม", "ค่าเช่า", "ประกัน", "สอบบัญชี", "บริการ"], "side": "pl_debit"},
+    L_FINANCE_COST: {"prefixes": ["54", "55"], "keywords": ["ดอกเบี้ยจ่าย", "ต้นทุนทางการเงิน"], "side": "pl_debit"},
+    L_TAX: {"prefixes": [], "keywords": ["ภาษีเงินได้นิติบุคคล"], "side": "pl_debit"},
 }
 
 FS_BS_STRUCTURE = [
     ('header', 'สินทรัพย์', None, None),
     ('header', 'สินทรัพย์หมุนเวียน', None, None),
-    ('item',   'เงินสดและรายการเทียบเท่าเงินสด', 4, 'เงินสดและรายการเทียบเท่าเงินสด'),
-    ('item',   'ลูกหนี้การค้า', 5, 'ลูกหนี้การค้า'),
-    ('item',   'เงินให้กู้ยืมแก่บุคคลที่เกี่ยวข้องกัน', None, 'เงินให้กู้ยืมแก่บุคคลที่เกี่ยวข้องกัน'),
-    ('item',   'สินทรัพย์หมุนเวียนอื่น', 6, 'สินทรัพย์หมุนเวียนอื่น'),
-    ('subtotal','รวมสินทรัพย์หมุนเวียน', None, ['เงินสดและรายการเทียบเท่าเงินสด', 'ลูกหนี้การค้า', 'เงินให้กู้ยืมแก่บุคคลที่เกี่ยวข้องกัน', 'สินทรัพย์หมุนเวียนอื่น']),
+    ('item',   L_CASH, 4, L_CASH),
+    ('item',   L_AR, 5, L_AR),
+    ('item',   L_LOAN_ASSET, None, L_LOAN_ASSET),
+    ('item',   L_OTHER_CA, 6, L_OTHER_CA),
+    ('subtotal','รวมสินทรัพย์หมุนเวียน', None, [L_CASH, L_AR, L_LOAN_ASSET, L_OTHER_CA]),
     ('spacer',  None, None, None),
     ('header', 'สินทรัพย์ไม่หมุนเวียน', None, None),
-    ('item',   'อุปกรณ์-สุทธิ (Gross)', None, 'อุปกรณ์-สุทธิ (Gross)'),
-    ('item',   'ค่าเสื่อมราคาสะสม', None, 'ค่าเสื่อมราคาสะสม'),
-    ('subtotal','อุปกรณ์-สุทธิ', 7, ['อุปกรณ์-สุทธิ (Gross)', '-ค่าเสื่อมราคาสะสม']),
+    ('item',   L_EQUIP, None, L_EQUIP),
+    ('item',   L_DEP, None, L_DEP),
+    ('subtotal','อุปกรณ์-สุทธิ', 7, [L_EQUIP, f'-{L_DEP}']),
     ('subtotal','รวมสินทรัพย์ไม่หมุนเวียน', None, ['อุปกรณ์-สุทธิ']),
     ('subtotal','รวมสินทรัพย์', None, ['รวมสินทรัพย์หมุนเวียน', 'รวมสินทรัพย์ไม่หมุนเวียน']),
     ('spacer',  None, None, None),
     ('header', 'หนี้สินและส่วนของเจ้าของ', None, None),
     ('header', 'หนี้สินหมุนเวียน', None, None),
-    ('item',   'เจ้าหนี้การค้า', None, 'เจ้าหนี้การค้า'),
-    ('item',   'เจ้าหนี้หมุนเวียนอื่น', 8, 'เจ้าหนี้หมุนเวียนอื่น'),
-    ('item',   'เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน', 9, 'เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน'),
-    ('item',   'หนี้สินหมุนเวียนอื่น', 10, 'หนี้สินหมุนเวียนอื่น'),
-    ('subtotal','รวมหนี้สินหมุนเวียน', None, ['เจ้าหนี้การค้า', 'เจ้าหนี้หมุนเวียนอื่น', 'เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน', 'หนี้สินหมุนเวียนอื่น']),
+    ('item',   L_AP, None, L_AP),
+    ('item',   L_OTHER_CP, 8, L_OTHER_CP),
+    ('item',   L_LOAN_LIAB, 9, L_LOAN_LIAB),
+    ('item',   L_OTHER_CL, 10, L_OTHER_CL),
+    ('subtotal','รวมหนี้สินหมุนเวียน', None, [L_AP, L_OTHER_CP, L_LOAN_LIAB, L_OTHER_CL]),
     ('subtotal','รวมหนี้สิน', None, ['รวมหนี้สินหมุนเวียน']),
     ('spacer',  None, None, None),
     ('header', 'ส่วนของเจ้าของ', None, None),
-    ('item',   'ทุนเรือนหุ้น', None, 'ทุนเรือนหุ้น'),
-    ('item',   'กำไร(ขาดทุน)สะสม', None, 'กำไร(ขาดทุน)สะสม'),
-    ('subtotal','รวมส่วนของเจ้าของ', None, ['ทุนเรือนหุ้น', 'กำไร(ขาดทุน)สะสม']),
+    ('item',   L_SHARE_CAPITAL, None, L_SHARE_CAPITAL),
+    ('item',   L_RETAINED_EARNINGS, None, L_RETAINED_EARNINGS),
+    ('subtotal','รวมส่วนของเจ้าของ', None, [L_SHARE_CAPITAL, L_RETAINED_EARNINGS]),
     ('subtotal','รวมหนี้สินและส่วนของเจ้าของ', None, ['รวมหนี้สิน', 'รวมส่วนของเจ้าของ']),
 ]
 
 FS_PL_STRUCTURE = [
     ('header',  'รายได้', None, None),
-    ('item',    'รายได้จากการให้บริการ', None, 'รายได้จากการให้บริการ'),
-    ('item',    'รายได้อื่น', None, 'รายได้อื่น'),
-    ('subtotal','รวมรายได้', None, ['รายได้จากการให้บริการ', 'รายได้อื่น']),
+    ('item',    L_REV_SERVICE, None, L_REV_SERVICE),
+    ('item',    L_REV_OTHER, None, L_REV_OTHER),
+    ('subtotal','รวมรายได้', None, [L_REV_SERVICE, L_REV_OTHER]),
     ('spacer',  None, None, None),
     ('header',  'ค่าใช้จ่าย', None, None),
-    ('item',    'ต้นทุนการให้บริการ', None, 'ต้นทุนการให้บริการ'),
-    ('item',    'ค่าใช้จ่ายในการขายและบริหาร', None, 'ค่าใช้จ่ายในการขายและบริหาร'),
-    ('subtotal','รวมค่าใช้จ่าย', None, ['ต้นทุนการให้บริการ', 'ค่าใช้จ่ายในการขายและบริหาร']),
-    ('item',    'ภาษีเงินได้', None, 'ภาษีเงินได้'),
-    ('subtotal','กำไร(ขาดทุน)สุทธิ', None, ['รวมรายได้', '-รวมค่าใช้จ่าย', '-ภาษีเงินได้']),
+    ('item',    L_COST_SERVICE, None, L_COST_SERVICE),
+    ('item',    L_SGNA, None, L_SGNA),
+    ('subtotal','รวมค่าใช้จ่าย', None, [L_COST_SERVICE, L_SGNA]),
+    ('spacer',  None, None, None),
+    ('subtotal','กำไร(ขาดทุน)ก่อนต้นทุนทางการเงินและภาษีเงินได้', None, ['รวมรายได้', '-รวมค่าใช้จ่าย']),
+    ('item',    L_FINANCE_COST, None, L_FINANCE_COST),
+    ('subtotal','กำไร(ขาดทุน)ก่อนภาษีเงินได้', None, ['กำไร(ขาดทุน)ก่อนต้นทุนทางการเงินและภาษีเงินได้', f'-{L_FINANCE_COST}']),
+    ('item',    L_TAX, None, L_TAX),
+    ('subtotal','กำไร(ขาดทุน)สุทธิ', None, ['กำไร(ขาดทุน)ก่อนภาษีเงินได้', f'-{L_TAX}']),
 ]
 
 # ==========================================
@@ -144,7 +177,7 @@ def _apply_cell_style(cell, bold=False, italic=False, indent=0, bg=None, border_
     double = Side(style='double')
     cell.border = Border(top=double if border_top else None, bottom=double if border_bottom else None)
 
-def _write_fs_sheet(ws, structure, years_computed, year_labels, company_name, statement_title, period_label):
+def _write_fs_sheet(ws, structure, years_computed, year_labels, company_name, statement_title, period_label, eq_details=None):
     NUM_FMT = '#,##0.00;[Red]-#,##0.00'
     HDR_FILL = 'DDEEFF'
     SUBTOT_FILL = 'F0F4F8'
@@ -158,17 +191,13 @@ def _write_fs_sheet(ws, structure, years_computed, year_labels, company_name, st
 
     row = 1
     ws.row_dimensions[row].height = 20
-    ws.cell(row, 1, company_name)
-    _apply_cell_style(ws.cell(row, 1), bold=True)
+    ws.cell(row, 1, company_name); _apply_cell_style(ws.cell(row, 1), bold=True)
     row += 1
-    ws.cell(row, 1, statement_title)
-    _apply_cell_style(ws.cell(row, 1), bold=True)
+    ws.cell(row, 1, statement_title); _apply_cell_style(ws.cell(row, 1), bold=True)
     row += 1
-    ws.cell(row, 1, period_label)
-    _apply_cell_style(ws.cell(row, 1))
+    ws.cell(row, 1, period_label); _apply_cell_style(ws.cell(row, 1))
     row += 1
-    ws.cell(row, 1, 'หน่วย : บาท')
-    _apply_cell_style(ws.cell(row, 1), italic=True)
+    ws.cell(row, 1, 'หน่วย : บาท'); _apply_cell_style(ws.cell(row, 1), italic=True)
     row += 1
 
     ws.row_dimensions[row].height = 18
@@ -188,6 +217,48 @@ def _write_fs_sheet(ws, structure, years_computed, year_labels, company_name, st
         is_subtotal = row_type == 'subtotal'
         indent = 0 if is_header else (1 if is_subtotal else 2)
 
+        # ==========================================
+        # CUSTOM EQUITY FORMATTING (TFRS Standard)
+        # ==========================================
+        if key == L_SHARE_CAPITAL and eq_details:
+            # 1. ทุนเรือนหุ้น (Header)
+            c = ws.cell(row, 1, label); _apply_cell_style(c, bold=True, indent=indent); row += 1
+            # 2. ทุนจดทะเบียน
+            c = ws.cell(row, 1, "ทุนจดทะเบียน"); _apply_cell_style(c, indent=indent+1); row += 1
+            # 3. Detail (Memo line)
+            c = ws.cell(row, 1, f"หุ้นสามัญ {eq_details['reg_shares']:,} หุ้น มูลค่าหุ้นละ {eq_details['reg_par']:,.2f} บาท")
+            _apply_cell_style(c, indent=indent+2)
+            for i, lbl in enumerate(year_labels):
+                val = eq_details['reg_shares'] * eq_details['reg_par']
+                vc = ws.cell(row, 3 + i * 2, val)
+                _apply_cell_style(vc, number_format=NUM_FMT, align='right')
+                vc.border = Border(bottom=Side(style='double')) # Double underline memo
+            row += 1
+            # 4. ทุนที่ออกและเรียกชำระแล้ว
+            c = ws.cell(row, 1, "ทุนที่ออกและเรียกชำระแล้ว"); _apply_cell_style(c, indent=indent+1); row += 1
+            # 5. Detail (Actual Value)
+            c = ws.cell(row, 1, f"หุ้นสามัญ {eq_details['paid_shares']:,} หุ้น มูลค่าหุ้นละ {eq_details['paid_par']:,.2f} บาท")
+            _apply_cell_style(c, indent=indent+2)
+            for i, lbl in enumerate(year_labels):
+                val = years_computed[lbl].get(label)
+                vc = ws.cell(row, 3 + i * 2, val)
+                _apply_cell_style(vc, number_format=NUM_FMT, align='right')
+            row += 1
+            continue
+            
+        if key == L_RETAINED_EARNINGS and eq_details:
+            # 1. กำไร(ขาดทุน)สะสม (Header)
+            c = ws.cell(row, 1, label); _apply_cell_style(c, bold=True, indent=indent); row += 1
+            # 2. ยังไม่ได้จัดสรร
+            c = ws.cell(row, 1, "ยังไม่ได้จัดสรร"); _apply_cell_style(c, indent=indent+1)
+            for i, lbl in enumerate(year_labels):
+                val = years_computed[lbl].get(label)
+                vc = ws.cell(row, 3 + i * 2, val)
+                _apply_cell_style(vc, number_format=NUM_FMT, align='right')
+            row += 1
+            continue
+
+        # --- Standard Writing Logic ---
         c = ws.cell(row, 1, label)
         _apply_cell_style(c, bold=(is_header or is_subtotal), indent=indent, bg=HDR_FILL if is_header else (SUBTOT_FILL if is_subtotal else None))
 
@@ -209,13 +280,12 @@ def _write_fs_sheet(ws, structure, years_computed, year_labels, company_name, st
 
 
 def generate_fs_excel(years_data: dict, company_name: str, current_year: str, prior_year: str = None, 
-                      registered_capital: float = 0, shares: int = 0, par_value: float = 0) -> bytes:
+                      eq_details: dict = None) -> bytes:
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
 
     year_labels = [current_year]
-    if prior_year and prior_year in years_data:
-        year_labels.append(prior_year)
+    if prior_year and prior_year in years_data: year_labels.append(prior_year)
 
     bs_computed = {} 
     pl_computed = {} 
@@ -224,28 +294,28 @@ def generate_fs_excel(years_data: dict, company_name: str, current_year: str, pr
         pl_vals = build_fs_from_mapping(mapping, FS_PL_STRUCTURE)
         net_profit = pl_vals.get('กำไร(ขาดทุน)สุทธิ', 0.0) or 0.0
         mapping_bs = dict(mapping)
-        mapping_bs['กำไร(ขาดทุน)สะสม'] = mapping.get('กำไร(ขาดทุน)สะสม', 0.0) + net_profit
+        mapping_bs[L_RETAINED_EARNINGS] = mapping.get(L_RETAINED_EARNINGS, 0.0) + net_profit
         
-        # Inject user's paid-up capital
-        if registered_capital > 0:
-            mapping_bs['ทุนเรือนหุ้น'] = registered_capital
+        # USE PAID-UP CAPITAL FOR THE MATH!
+        if eq_details:
+            mapping_bs[L_SHARE_CAPITAL] = eq_details['paid_shares'] * eq_details['paid_par']
             
         bs_computed[yl] = build_fs_from_mapping(mapping_bs, FS_BS_STRUCTURE)
         pl_computed[yl] = pl_vals
 
     ws_bs = wb.create_sheet('งบฐานะการเงิน')
-    _write_fs_sheet(ws_bs, FS_BS_STRUCTURE, bs_computed, year_labels, company_name, 'งบฐานะการเงิน', f'ณ วันที่ 31 ธันวาคม {current_year}')
+    _write_fs_sheet(ws_bs, FS_BS_STRUCTURE, bs_computed, year_labels, company_name, 'งบฐานะการเงิน', f'ณ วันที่ 31 ธันวาคม {current_year}', eq_details)
 
     ws_pl = wb.create_sheet('งบกำไรขาดทุน')
-    _write_fs_sheet(ws_pl, FS_PL_STRUCTURE, pl_computed, year_labels, company_name, 'งบกำไรขาดทุน', f'สำหรับปีสิ้นสุดวันที่ 31 ธันวาคม {current_year}')
+    _write_fs_sheet(ws_pl, FS_PL_STRUCTURE, pl_computed, year_labels, company_name, 'งบกำไรขาดทุน', f'สำหรับปีสิ้นสุดวันที่ 31 ธันวาคม {current_year}', None)
 
-    _write_equity_sheet(wb, company_name, current_year, prior_year, bs_computed, pl_computed, year_labels, registered_capital, shares, par_value)
+    if eq_details:
+        _write_equity_sheet(wb, company_name, current_year, prior_year, bs_computed, pl_computed, year_labels, eq_details['reg_shares']*eq_details['reg_par'], eq_details['paid_shares'], eq_details['paid_par'])
 
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf.getvalue()
-
 
 def _write_equity_sheet(wb, company_name, current_year, prior_year, bs_computed, pl_computed, year_labels, registered_capital, shares, par_value):
     ws = wb.create_sheet('งบส่วนของเจ้าของ')
@@ -275,9 +345,12 @@ def _write_equity_sheet(wb, company_name, current_year, prior_year, bs_computed,
     def get_pl(yl, key): return pl_computed.get(yl, {}).get(key, 0.0) or 0.0
     def get_bs(yl, key): return bs_computed.get(yl, {}).get(key, 0.0) or 0.0
 
+    # FIX: Calculate actual paid-up capital
+    paid_up_capital = shares * par_value
+
     if prior_year and prior_year in bs_computed:
-        prior_capital = get_bs(prior_year, 'ทุนเรือนหุ้น') or registered_capital
-        prior_retained = get_bs(prior_year, 'กำไร(ขาดทุน)สะสม') - get_pl(prior_year, 'กำไร(ขาดทุน)สุทธิ')
+        prior_capital = get_bs(prior_year, L_SHARE_CAPITAL) or paid_up_capital
+        prior_retained = get_bs(prior_year, L_RETAINED_EARNINGS) - get_pl(prior_year, 'กำไร(ขาดทุน)สุทธิ')
         prior_net = get_pl(prior_year, 'กำไร(ขาดทุน)สุทธิ')
 
         wc(r, 1, f'ยอด ณ วันต้นปี {prior_year}', bold=True)
@@ -297,11 +370,12 @@ def _write_equity_sheet(wb, company_name, current_year, prior_year, bs_computed,
         cur_capital_open = prior_end_cap
         cur_retained_open = prior_end_ret
     else:
-        cur_capital_open = registered_capital
+        # FIX: Ensure we use the paid_up_capital here, NOT the registered_capital
+        cur_capital_open = paid_up_capital
         cur_retained_open = 0
 
     cur_net = get_pl(current_year, 'กำไร(ขาดทุน)สุทธิ')
-    cur_capital = get_bs(current_year, 'ทุนเรือนหุ้น') or registered_capital
+    cur_capital = get_bs(current_year, L_SHARE_CAPITAL) or paid_up_capital
 
     wc(r, 1, f'ยอด ณ วันต้นปี {current_year}', bold=True)
     wc(r, 4, cur_capital_open, num=True, align='right')
@@ -317,8 +391,7 @@ def _write_equity_sheet(wb, company_name, current_year, prior_year, bs_computed,
     wc(r, 8, cur_capital + cur_end_ret, num=True, align='right'); r += 1
     r += 1
     wc(r, 1, 'หมายเหตุประกอบงบการเงินเป็นส่วนหนึ่งของงบการเงินนี้', italic=True)
-
-
+    
 # ==========================================
 # PARSERS
 # ==========================================
@@ -815,13 +888,14 @@ def main():
             merged_df['FS Line Item'] = edited_mapping['FS Line Item']
             merged_df['FS Value'] = edited_mapping['FS Value']
 
-            # ---------------------------------------------
-            # HIERARCHICAL FS PREVIEW
-            # ---------------------------------------------
+           # ==========================================
+            # 4. HIERARCHICAL FS PREVIEWS (TABS)
+            # ==========================================
             st.write("---")
-            st.subheader("📑 Interactive Balance Sheet Preview (งบฐานะการเงิน)")
+            st.subheader("📑 Interactive Financial Statements Preview (งบการเงิน)")
             st.write("Review the final structure. Click on line items to see the raw TB data. Highlighted rows are auto-calculated.")
 
+            # Calculate P&L and BS Summaries for the previews
             pl_summary = {k: edited_mapping.loc[edited_mapping['FS Line Item'] == k, 'FS Value'].sum() for k, v in FS_LINE_ITEMS.items() if v['side'] in ['pl_debit', 'pl_credit']}
             pl_computed = build_fs_from_mapping(pl_summary, FS_PL_STRUCTURE)
             net_profit = pl_computed.get('กำไร(ขาดทุน)สุทธิ', 0.0)
@@ -830,59 +904,182 @@ def main():
             bs_summary['กำไร(ขาดทุน)สะสม'] = bs_summary.get('กำไร(ขาดทุน)สะสม', 0.0) + net_profit
             
             total_paid_capital = paid_shares * paid_par
-            if total_paid_capital > 0: bs_summary['ทุนเรือนหุ้น'] = total_paid_capital
+            if total_paid_capital > 0: 
+                bs_summary['ทุนเรือนหุ้น'] = total_paid_capital
 
             bs_computed = build_fs_from_mapping(bs_summary, FS_BS_STRUCTURE)
 
-            for row_type, label, note, key in FS_BS_STRUCTURE:
-                if row_type == 'spacer':
-                    st.write("") 
-                    continue
-                if row_type == 'header':
-                    st.markdown(f"#### 🏛️ {label}")
-                    continue
-                if row_type == 'subtotal':
-                    val = bs_computed.get(label, 0.0)
-                    if "รวมหนี้สินและส่วนของเจ้าของ" in label or label == "รวมสินทรัพย์": st.success(f"**{label}** \n### {val:,.2f} บาท")
-                    else: st.info(f"**∑ {label}** : {val:,.2f}")
-                    continue
-                if row_type == 'item':
-                    item_total = bs_computed.get(label, 0.0)
-                    if key == 'ทุนเรือนหุ้น':
-                        with st.expander(f"📄 **{label}** : {item_total:,.2f}"):
-                            st.caption("ดึงข้อมูลอัตโนมัติจากการตั้งค่า Company Info:")
-                            st.markdown(f"**ทุนจดทะเบียน (Authorized):**\n- หุ้นสามัญ {reg_shares:,.0f} หุ้น มูลค่าหุ้นละ {reg_par:,.2f} บาท (รวม {reg_shares*reg_par:,.2f} บาท)")
-                            st.markdown(f"**ทุนที่ออกและเรียกชำระแล้ว (Paid-up):**\n- หุ้นสามัญ {paid_shares:,.0f} หุ้น มูลค่าหุ้นละ {paid_par:,.2f} บาท (รวม {paid_shares*paid_par:,.2f} บาท)")
-                            st.info("💡 หมายเหตุ: ยอดที่นำไปคำนวณทางคณิตศาสตร์ในงบการเงินคือ **ทุนที่ออกและเรียกชำระแล้ว** เท่านั้น")
-                    elif key == 'กำไร(ขาดทุน)สะสม':
-                        with st.expander(f"📄 **{label}** (ยังไม่ได้จัดสรร) : {item_total:,.2f}"):
-                            st.caption("Retained Earnings + Current Year Net Profit")
-                            tb_re = bs_summary.get('กำไร(ขาดทุน)สะสม', 0.0) - net_profit
-                            st.write(f"- กำไรสะสมต้นงวด (จาก TB): {tb_re:,.2f}")
-                            st.write(f"- กำไร(ขาดทุน)สุทธิปีปัจจุบัน: {net_profit:,.2f}")
-                    else:
+            # Create Sub-tabs for the 3 reports
+            preview_bs, preview_pl, preview_eq = st.tabs(["🏛️ งบฐานะการเงิน (Balance Sheet)", "📈 งบกำไรขาดทุน (Income Statement)", "⚖️ งบส่วนของเจ้าของ (Equity)"])
+
+            # ---------------------------------------------
+            # TAB 1: BALANCE SHEET PREVIEW
+            # ---------------------------------------------
+            with preview_bs:
+                for row_type, label, note, key in FS_BS_STRUCTURE:
+                    if row_type == 'spacer':
+                        st.write("") 
+                        continue
+                    if row_type == 'header':
+                        st.markdown(f"#### 🏛️ {label}")
+                        continue
+                        
+                    if row_type == 'subtotal':
+                        val = bs_computed.get(label, 0.0)
+                        
+                        # 1. Dynamically build the math formula for the tooltip
+                        formula_parts = []
+                        for k in key:
+                            if k.startswith('-'): formula_parts.append(f"- {k[1:]}")
+                            else: formula_parts.append(f"+ {k}")
+                        formula_text = (" ".join(formula_parts)).lstrip("+ ")
+                        tooltip_text = f"วิธีการคำนวณ: {formula_text}"
+
+                        # 2. Draw Custom Box with Hover Tooltip (Supports Dark/Light Mode)
+                        if "รวมหนี้สินและส่วนของเจ้าของ" in label or label == "รวมสินทรัพย์":
+                            html_box = f"""
+                            <div title="{tooltip_text}" style="padding: 15px; border-radius: 5px; background-color: var(--secondary-background-color); color: var(--text-color); border-left: 8px solid #28a745; margin-bottom: 10px; cursor: help;">
+                                <strong style="font-size: 1.1em;">{label}</strong><br>
+                                <span style="font-size: 1.8em; font-weight: bold;">{val:,.2f} บาท</span>
+                            </div>
+                            """
+                            st.markdown(html_box, unsafe_allow_html=True)
+                        else:
+                            html_box = f"""
+                            <div title="{tooltip_text}" style="padding: 10px; border-radius: 5px; background-color: var(--secondary-background-color); color: var(--text-color); border-left: 5px solid #007bff; margin-bottom: 10px; cursor: help;">
+                                <strong>∑ {label}</strong> : {val:,.2f}
+                            </div>
+                            """
+                            st.markdown(html_box, unsafe_allow_html=True)
+                        continue
+
+                    if row_type == 'item':
+                        item_total = bs_computed.get(label, 0.0)
+                        if key == 'ทุนเรือนหุ้น':
+                            with st.expander(f"📄 **{label}** : {item_total:,.2f}"):
+                                st.caption("ดึงข้อมูลอัตโนมัติจากการตั้งค่า Company Info:")
+                                st.markdown(f"**ทุนจดทะเบียน (Authorized):**\n- หุ้นสามัญ {reg_shares:,.0f} หุ้น มูลค่าหุ้นละ {reg_par:,.2f} บาท (รวม {reg_shares*reg_par:,.2f} บาท)")
+                                st.markdown(f"**ทุนที่ออกและเรียกชำระแล้ว (Paid-up):**\n- หุ้นสามัญ {paid_shares:,.0f} หุ้น มูลค่าหุ้นละ {paid_par:,.2f} บาท (รวม {paid_shares*paid_par:,.2f} บาท)")
+                                st.info("💡 หมายเหตุ: ยอดที่นำไปคำนวณทางคณิตศาสตร์ในงบการเงินคือ **ทุนที่ออกและเรียกชำระแล้ว** เท่านั้น")
+                        elif key == 'กำไร(ขาดทุน)สะสม':
+                            with st.expander(f"📄 **{label}** (ยังไม่ได้จัดสรร) : {item_total:,.2f}"):
+                                st.caption("Retained Earnings + Current Year Net Profit")
+                                tb_re = bs_summary.get('กำไร(ขาดทุน)สะสม', 0.0) - net_profit
+                                st.write(f"- กำไรสะสมต้นงวด (จาก TB): {tb_re:,.2f}")
+                                st.write(f"- กำไร(ขาดทุน)สุทธิปีปัจจุบัน: {net_profit:,.2f}")
+                        else:
+                            with st.expander(f"📄 **{label}** : {item_total:,.2f}"):
+                                mask = edited_mapping['FS Line Item'] == key
+                                line_df = edited_mapping[mask]
+                                if not line_df.empty:
+                                    display_df = line_df[['Account ID', 'Account Name', 'FS Value']].reset_index(drop=True)
+                                    st.dataframe(display_df, use_container_width=True, column_config={"Account ID": "รหัสบัญชี", "Account Name": "ชื่อบัญชี", "FS Value": st.column_config.NumberColumn("ยอดเงิน (Value)", format="%,.2f")})
+                                else: st.warning("ยังไม่มีบัญชีที่ผูกกับรายการนี้")
+
+            # ---------------------------------------------
+            # TAB 2: INCOME STATEMENT PREVIEW
+            # ---------------------------------------------
+            with preview_pl:
+                for row_type, label, note, key in FS_PL_STRUCTURE:
+                    if row_type == 'spacer':
+                        st.write("") 
+                        continue
+                    if row_type == 'header':
+                        st.markdown(f"#### 📈 {label}")
+                        continue
+                        
+                    if row_type == 'subtotal':
+                        val = pl_computed.get(label, 0.0)
+                        
+                        # 1. Dynamically build the math formula for the tooltip
+                        formula_parts = []
+                        for k in key:
+                            if k.startswith('-'): formula_parts.append(f"- {k[1:]}")
+                            else: formula_parts.append(f"+ {k}")
+                        formula_text = (" ".join(formula_parts)).lstrip("+ ")
+                        tooltip_text = f"วิธีการคำนวณ: {formula_text}"
+
+                        # 2. Draw Custom Box with Hover Tooltip
+                        if label == "กำไร(ขาดทุน)สุทธิ": 
+                            border_color = "#28a745" if val >= 0 else "#dc3545" # Green if profit, Red if loss
+                            html_box = f"""
+                            <div title="{tooltip_text}" style="padding: 15px; border-radius: 5px; background-color: var(--secondary-background-color); color: var(--text-color); border-left: 8px solid {border_color}; margin-bottom: 10px; cursor: help;">
+                                <strong style="font-size: 1.1em;">{label}</strong><br>
+                                <span style="font-size: 1.8em; font-weight: bold;">{val:,.2f} บาท</span>
+                            </div>
+                            """
+                            st.markdown(html_box, unsafe_allow_html=True)
+                        else: 
+                            html_box = f"""
+                            <div title="{tooltip_text}" style="padding: 10px; border-radius: 5px; background-color: var(--secondary-background-color); color: var(--text-color); border-left: 5px solid #007bff; margin-bottom: 10px; cursor: help;">
+                                <strong>∑ {label}</strong> : {val:,.2f}
+                            </div>
+                            """
+                            st.markdown(html_box, unsafe_allow_html=True)
+                        continue
+
+                    if row_type == 'item':
+                        item_total = pl_computed.get(label, 0.0)
                         with st.expander(f"📄 **{label}** : {item_total:,.2f}"):
                             mask = edited_mapping['FS Line Item'] == key
                             line_df = edited_mapping[mask]
                             if not line_df.empty:
                                 display_df = line_df[['Account ID', 'Account Name', 'FS Value']].reset_index(drop=True)
                                 st.dataframe(display_df, use_container_width=True, column_config={"Account ID": "รหัสบัญชี", "Account Name": "ชื่อบัญชี", "FS Value": st.column_config.NumberColumn("ยอดเงิน (Value)", format="%,.2f")})
-                            else: st.warning("ยังไม่มีบัญชีที่ผูกกับรายการนี้")
+                            else: 
+                                st.warning("ยังไม่มีบัญชีที่ผูกกับรายการนี้")
+
+            # ---------------------------------------------
+            # TAB 3: EQUITY STATEMENT PREVIEW
+            # ---------------------------------------------
+            with preview_eq:
+                st.markdown("#### ⚖️ งบการเปลี่ยนแปลงส่วนของเจ้าของ")
+                st.write(f"สำหรับปีสิ้นสุดวันที่ 31 ธันวาคม {current_year_label}")
+                
+                # Calculate the 3x3 Matrix values
+                open_cap = paid_shares * paid_par
+                open_re = bs_summary.get('กำไร(ขาดทุน)สะสม', 0.0) - net_profit
+                
+                eq_data = {
+                    "รายการ (Description)": [
+                        f"ยอด ณ วันต้นปี {current_year_label}",
+                        "กำไร(ขาดทุน)สุทธิสำหรับปี",
+                        f"ยอดคงเหลือ ณ สิ้นปี {current_year_label}"
+                    ],
+                    "ทุนที่ออกและเรียกชำระแล้ว": [open_cap, 0.0, open_cap],
+                    "กำไร(ขาดทุน)สะสม": [open_re, net_profit, open_re + net_profit],
+                    "รวมส่วนของเจ้าของ": [open_cap + open_re, net_profit, open_cap + open_re + net_profit]
+                }
+                
+                eq_df = pd.DataFrame(eq_data)
+                
+                # Display as a beautiful dataframe
+                st.dataframe(
+                    eq_df, 
+                    use_container_width=True, 
+                    hide_index=True,
+                    column_config={
+                        "ทุนที่ออกและเรียกชำระแล้ว": st.column_config.NumberColumn(format="%,.2f"),
+                        "กำไร(ขาดทุน)สะสม": st.column_config.NumberColumn(format="%,.2f"),
+                        "รวมส่วนของเจ้าของ": st.column_config.NumberColumn(format="%,.2f")
+                    }
+                )
 
         # ---------------------------------------------
         # EXPORT REPORTS
         # ---------------------------------------------
         with tab_export:
             st.write("Download your reconciled data or generate the finalized Financial Statements.")
+            
+            # FIX: Ensure we strictly use the smartly calculated 'FS Value' 
             def compute_fs_summary(df):
                 summary = {}
-                for fs_line, rules in FS_LINE_ITEMS.items():
-                    side = rules.get('side', 'bs_debit')
-                    col_map = {'bs_debit': 'BS Debit', 'bs_credit': 'BS Credit', 'pl_debit': 'PL Debit', 'pl_credit': 'PL Credit'}
-                    col = col_map.get(side, 'TB Net Balance')
+                for fs_line in FS_LINE_ITEMS.keys():
                     mask = df['FS Line Item'] == fs_line
-                    if col in df.columns: summary[fs_line] = df.loc[mask, col].sum()
-                    else: summary[fs_line] = df.loc[mask, 'TB Net Balance'].sum()
+                    if 'FS Value' in df.columns: 
+                        summary[fs_line] = df.loc[mask, 'FS Value'].sum()
+                    else: 
+                        summary[fs_line] = df.loc[mask, 'TB Net Balance'].sum()
                 return summary
             
             fs_summary_current = compute_fs_summary(edited_mapping)
@@ -924,7 +1121,14 @@ def main():
                 if not company_name: st.warning("กรุณากรอกชื่อบริษัทด้านบน (Company Info) ก่อนสร้างงบ")
                 else:
                     try:
-                        fs_bytes = generate_fs_excel(years_data=years_data, company_name=company_name, current_year=current_year_label, prior_year=prior_year_arg, registered_capital=reg_shares * reg_par, shares=paid_shares, par_value=paid_par)
+                        # Package up the equity details to pass to the exporter
+                        eq_details = {
+                            'reg_shares': reg_shares,
+                            'reg_par': reg_par,
+                            'paid_shares': paid_shares,
+                            'paid_par': paid_par
+                        }
+                        fs_bytes = generate_fs_excel(years_data=years_data, company_name=company_name, current_year=current_year_label, prior_year=prior_year_arg, eq_details=eq_details)
                         safe_name = re.sub(r'[^\w\u0e00-\u0e7f]', '_', company_name)[:30]
                         st.download_button(label="📊 Download Financial Statements", data=fs_bytes, file_name=f"FS_{safe_name}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
                     except Exception as e: st.error(f"Error generating FS: {e}")
