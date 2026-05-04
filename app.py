@@ -888,14 +888,87 @@ def main():
             merged_df['FS Line Item'] = edited_mapping['FS Line Item']
             merged_df['FS Value'] = edited_mapping['FS Value']
 
-           # ==========================================
-            # 4. HIERARCHICAL FS PREVIEWS (TABS)
+            # ==========================================
+            # 4. NOTES GENERATOR FUNCTION (TEXT)
+            # ==========================================
+            def generate_notes_text(company_name, current_year, mapping_df, bs_structure, pl_structure):
+                def visual_len(text):
+                    # Remove zero-width Thai vowels/tone marks for accurate character counting and spacing
+                    return len(re.sub(r'[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]', '', str(text)))
+                
+                lines = []
+                lines.append("หมายเหตุประกอบงบการเงิน")
+                lines.append(f"{company_name}")
+                lines.append(f"สำหรับปีสิ้นสุดวันที่ 31 ธันวาคม {current_year}")
+                lines.append("=" * 65)
+                lines.append("\n1. ข้อมูลทั่วไป")
+                lines.append("   (พิมพ์รายละเอียดที่อยู่และลักษณะธุรกิจของบริษัทที่นี่...)")
+                lines.append("\n2. เกณฑ์การจัดทำงบการเงิน")
+                lines.append("   งบการเงินนี้จัดทำขึ้นตามมาตรฐานการรายงานทางการเงินสำหรับกิจการที่ไม่มีส่วนได้เสียสาธารณะ (TFRS for NPAEs)")
+                lines.append("\n3. สรุปนโยบายการบัญชีที่สำคัญ")
+                lines.append("   (พิมพ์นโยบายการบัญชี เช่น การรับรู้รายได้, ค่าเสื่อมราคา ที่นี่...)")
+                lines.append("\n" + "=" * 65)
+
+                # Collect all lines that have a Note Number assigned
+                noted_items = []
+                for row in bs_structure + pl_structure:
+                    if row[2] is not None:
+                        noted_items.append(row)
+                        
+                # Sort numerically by note number
+                noted_items.sort(key=lambda x: int(x[2]) if str(x[2]).isdigit() else 999)
+
+                for row_type, label, note_num, key in noted_items:
+                    lines.append(f"\nหมายเหตุ {note_num} : {label}")
+                    lines.append("-" * 65)
+                    
+                    total = 0.0
+                    if row_type == 'item':
+                        mask = mapping_df['FS Line Item'] == key
+                        accounts = mapping_df[mask].sort_values(by='Account ID')
+                        for _, acc in accounts.iterrows():
+                            val = acc['FS Value']
+                            if val != 0:
+                                name_str = f"{acc['Account ID']} {acc['Account Name']}"
+                                val_str = f"{val:,.2f}"
+                                pad = max(1, 65 - visual_len(name_str) - len(val_str))
+                                lines.append(f"{name_str}{' ' * pad}{val_str}")
+                                total += val
+                                
+                    elif row_type == 'subtotal':
+                        for k in key:
+                            is_negative = k.startswith('-')
+                            actual_key = k[1:] if is_negative else k
+                            mask = mapping_df['FS Line Item'] == actual_key
+                            accounts = mapping_df[mask].sort_values(by='Account ID')
+                            for _, acc in accounts.iterrows():
+                                val = acc['FS Value']
+                                if val != 0:
+                                    display_val = -val if is_negative else val
+                                    name_str = f"{acc['Account ID']} {acc['Account Name']}"
+                                    val_str = f"{display_val:,.2f}"
+                                    pad = max(1, 65 - visual_len(name_str) - len(val_str))
+                                    lines.append(f"{name_str}{' ' * pad}{val_str}")
+                                    total += display_val
+
+                    lines.append("-" * 65)
+                    total_str = f"{total:,.2f}"
+                    pad = max(1, 65 - visual_len("รวม") - len(total_str))
+                    lines.append(f"รวม{' ' * pad}{total_str}")
+                    lines.append("=" * 65)
+                    
+                return "\n".join(lines)
+
+            # Generate the text output in memory
+            notes_text = generate_notes_text(company_name, current_year_label, edited_mapping, FS_BS_STRUCTURE, FS_PL_STRUCTURE)
+
+            # ==========================================
+            # 5. HIERARCHICAL FS PREVIEWS (TABS)
             # ==========================================
             st.write("---")
             st.subheader("📑 Interactive Financial Statements Preview (งบการเงิน)")
             st.write("Review the final structure. Click on line items to see the raw TB data. Highlighted rows are auto-calculated.")
 
-            # Calculate P&L and BS Summaries for the previews
             pl_summary = {k: edited_mapping.loc[edited_mapping['FS Line Item'] == k, 'FS Value'].sum() for k, v in FS_LINE_ITEMS.items() if v['side'] in ['pl_debit', 'pl_credit']}
             pl_computed = build_fs_from_mapping(pl_summary, FS_PL_STRUCTURE)
             net_profit = pl_computed.get('กำไร(ขาดทุน)สุทธิ', 0.0)
@@ -909,8 +982,10 @@ def main():
 
             bs_computed = build_fs_from_mapping(bs_summary, FS_BS_STRUCTURE)
 
-            # Create Sub-tabs for the 3 reports
-            preview_bs, preview_pl, preview_eq = st.tabs(["🏛️ งบฐานะการเงิน (Balance Sheet)", "📈 งบกำไรขาดทุน (Income Statement)", "⚖️ งบส่วนของเจ้าของ (Equity)"])
+            # ADDED NEW TAB FOR NOTES
+            preview_bs, preview_pl, preview_eq, preview_notes = st.tabs([
+                "🏛️ งบฐานะการเงิน (BS)", "📈 งบกำไรขาดทุน (P&L)", "⚖️ งบส่วนของเจ้าของ (Eq)", "📄 หมายเหตุประกอบงบ (Notes)"
+            ])
 
             # ---------------------------------------------
             # TAB 1: BALANCE SHEET PREVIEW
@@ -918,38 +993,21 @@ def main():
             with preview_bs:
                 for row_type, label, note, key in FS_BS_STRUCTURE:
                     if row_type == 'spacer':
-                        st.write("") 
-                        continue
+                        st.write(""); continue
                     if row_type == 'header':
-                        st.markdown(f"#### 🏛️ {label}")
-                        continue
+                        st.markdown(f"#### 🏛️ {label}"); continue
                         
                     if row_type == 'subtotal':
                         val = bs_computed.get(label, 0.0)
-                        
-                        # 1. Dynamically build the math formula for the tooltip
-                        formula_parts = []
-                        for k in key:
-                            if k.startswith('-'): formula_parts.append(f"- {k[1:]}")
-                            else: formula_parts.append(f"+ {k}")
+                        formula_parts = [f"- {k[1:]}" if k.startswith('-') else f"+ {k}" for k in key]
                         formula_text = (" ".join(formula_parts)).lstrip("+ ")
                         tooltip_text = f"วิธีการคำนวณ: {formula_text}"
 
-                        # 2. Draw Custom Box with Hover Tooltip (Supports Dark/Light Mode)
                         if "รวมหนี้สินและส่วนของเจ้าของ" in label or label == "รวมสินทรัพย์":
-                            html_box = f"""
-                            <div title="{tooltip_text}" style="padding: 15px; border-radius: 5px; background-color: var(--secondary-background-color); color: var(--text-color); border-left: 8px solid #28a745; margin-bottom: 10px; cursor: help;">
-                                <strong style="font-size: 1.1em;">{label}</strong><br>
-                                <span style="font-size: 1.8em; font-weight: bold;">{val:,.2f} บาท</span>
-                            </div>
-                            """
+                            html_box = f"""<div title="{tooltip_text}" style="padding: 15px; border-radius: 5px; background-color: var(--secondary-background-color); color: var(--text-color); border-left: 8px solid #28a745; margin-bottom: 10px; cursor: help;"><strong style="font-size: 1.1em;">{label}</strong><br><span style="font-size: 1.8em; font-weight: bold;">{val:,.2f} บาท</span></div>"""
                             st.markdown(html_box, unsafe_allow_html=True)
                         else:
-                            html_box = f"""
-                            <div title="{tooltip_text}" style="padding: 10px; border-radius: 5px; background-color: var(--secondary-background-color); color: var(--text-color); border-left: 5px solid #007bff; margin-bottom: 10px; cursor: help;">
-                                <strong>∑ {label}</strong> : {val:,.2f}
-                            </div>
-                            """
+                            html_box = f"""<div title="{tooltip_text}" style="padding: 10px; border-radius: 5px; background-color: var(--secondary-background-color); color: var(--text-color); border-left: 5px solid #007bff; margin-bottom: 10px; cursor: help;"><strong>∑ {label}</strong> : {val:,.2f}</div>"""
                             st.markdown(html_box, unsafe_allow_html=True)
                         continue
 
@@ -982,39 +1040,22 @@ def main():
             with preview_pl:
                 for row_type, label, note, key in FS_PL_STRUCTURE:
                     if row_type == 'spacer':
-                        st.write("") 
-                        continue
+                        st.write(""); continue
                     if row_type == 'header':
-                        st.markdown(f"#### 📈 {label}")
-                        continue
+                        st.markdown(f"#### 📈 {label}"); continue
                         
                     if row_type == 'subtotal':
                         val = pl_computed.get(label, 0.0)
-                        
-                        # 1. Dynamically build the math formula for the tooltip
-                        formula_parts = []
-                        for k in key:
-                            if k.startswith('-'): formula_parts.append(f"- {k[1:]}")
-                            else: formula_parts.append(f"+ {k}")
+                        formula_parts = [f"- {k[1:]}" if k.startswith('-') else f"+ {k}" for k in key]
                         formula_text = (" ".join(formula_parts)).lstrip("+ ")
                         tooltip_text = f"วิธีการคำนวณ: {formula_text}"
 
-                        # 2. Draw Custom Box with Hover Tooltip
                         if label == "กำไร(ขาดทุน)สุทธิ": 
-                            border_color = "#28a745" if val >= 0 else "#dc3545" # Green if profit, Red if loss
-                            html_box = f"""
-                            <div title="{tooltip_text}" style="padding: 15px; border-radius: 5px; background-color: var(--secondary-background-color); color: var(--text-color); border-left: 8px solid {border_color}; margin-bottom: 10px; cursor: help;">
-                                <strong style="font-size: 1.1em;">{label}</strong><br>
-                                <span style="font-size: 1.8em; font-weight: bold;">{val:,.2f} บาท</span>
-                            </div>
-                            """
+                            border_color = "#28a745" if val >= 0 else "#dc3545"
+                            html_box = f"""<div title="{tooltip_text}" style="padding: 15px; border-radius: 5px; background-color: var(--secondary-background-color); color: var(--text-color); border-left: 8px solid {border_color}; margin-bottom: 10px; cursor: help;"><strong style="font-size: 1.1em;">{label}</strong><br><span style="font-size: 1.8em; font-weight: bold;">{val:,.2f} บาท</span></div>"""
                             st.markdown(html_box, unsafe_allow_html=True)
                         else: 
-                            html_box = f"""
-                            <div title="{tooltip_text}" style="padding: 10px; border-radius: 5px; background-color: var(--secondary-background-color); color: var(--text-color); border-left: 5px solid #007bff; margin-bottom: 10px; cursor: help;">
-                                <strong>∑ {label}</strong> : {val:,.2f}
-                            </div>
-                            """
+                            html_box = f"""<div title="{tooltip_text}" style="padding: 10px; border-radius: 5px; background-color: var(--secondary-background-color); color: var(--text-color); border-left: 5px solid #007bff; margin-bottom: 10px; cursor: help;"><strong>∑ {label}</strong> : {val:,.2f}</div>"""
                             st.markdown(html_box, unsafe_allow_html=True)
                         continue
 
@@ -1035,35 +1076,28 @@ def main():
             with preview_eq:
                 st.markdown("#### ⚖️ งบการเปลี่ยนแปลงส่วนของเจ้าของ")
                 st.write(f"สำหรับปีสิ้นสุดวันที่ 31 ธันวาคม {current_year_label}")
-                
-                # Calculate the 3x3 Matrix values
                 open_cap = paid_shares * paid_par
                 open_re = bs_summary.get('กำไร(ขาดทุน)สะสม', 0.0) - net_profit
                 
                 eq_data = {
-                    "รายการ (Description)": [
-                        f"ยอด ณ วันต้นปี {current_year_label}",
-                        "กำไร(ขาดทุน)สุทธิสำหรับปี",
-                        f"ยอดคงเหลือ ณ สิ้นปี {current_year_label}"
-                    ],
+                    "รายการ (Description)": [f"ยอด ณ วันต้นปี {current_year_label}", "กำไร(ขาดทุน)สุทธิสำหรับปี", f"ยอดคงเหลือ ณ สิ้นปี {current_year_label}"],
                     "ทุนที่ออกและเรียกชำระแล้ว": [open_cap, 0.0, open_cap],
                     "กำไร(ขาดทุน)สะสม": [open_re, net_profit, open_re + net_profit],
                     "รวมส่วนของเจ้าของ": [open_cap + open_re, net_profit, open_cap + open_re + net_profit]
                 }
+                st.dataframe(pd.DataFrame(eq_data), use_container_width=True, hide_index=True, column_config={
+                    "ทุนที่ออกและเรียกชำระแล้ว": st.column_config.NumberColumn(format="%,.2f"),
+                    "กำไร(ขาดทุน)สะสม": st.column_config.NumberColumn(format="%,.2f"),
+                    "รวมส่วนของเจ้าของ": st.column_config.NumberColumn(format="%,.2f")
+                })
                 
-                eq_df = pd.DataFrame(eq_data)
-                
-                # Display as a beautiful dataframe
-                st.dataframe(
-                    eq_df, 
-                    use_container_width=True, 
-                    hide_index=True,
-                    column_config={
-                        "ทุนที่ออกและเรียกชำระแล้ว": st.column_config.NumberColumn(format="%,.2f"),
-                        "กำไร(ขาดทุน)สะสม": st.column_config.NumberColumn(format="%,.2f"),
-                        "รวมส่วนของเจ้าของ": st.column_config.NumberColumn(format="%,.2f")
-                    }
-                )
+            # ---------------------------------------------
+            # TAB 4: NOTES TO FS PREVIEW (NEW)
+            # ---------------------------------------------
+            with preview_notes:
+                st.markdown("#### 📄 หมายเหตุประกอบงบการเงิน (Notes to Financial Statements)")
+                st.write("ข้อมูลด้านล่างถูกจัดรูปแบบให้ตรงกับระยะเว้นวรรค (Spacing) คัดลอกและนำไปวางใน Microsoft Word ได้ทันที")
+                st.code(notes_text, language='text')
 
         # ---------------------------------------------
         # EXPORT REPORTS
@@ -1071,7 +1105,6 @@ def main():
         with tab_export:
             st.write("Download your reconciled data or generate the finalized Financial Statements.")
             
-            # FIX: Ensure we strictly use the smartly calculated 'FS Value' 
             def compute_fs_summary(df):
                 summary = {}
                 for fs_line in FS_LINE_ITEMS.keys():
@@ -1102,6 +1135,8 @@ def main():
                 except Exception as e: st.warning(f"Could not parse prior year TB: {e}")
 
             col_e1, col_e2, col_e3 = st.columns(3)
+            safe_name = re.sub(r'[^\w\u0e00-\u0e7f]', '_', company_name)[:30] if company_name else "Company"
+
             with col_e1:
                 st.markdown("##### 📋 Reconciliation Report")
                 buffer_recon = io.BytesIO()
@@ -1113,29 +1148,33 @@ def main():
                     missing_in_tb_df.rename(columns=rename_dict).to_excel(writer, sheet_name='Missing in TB', index=False)
                     missing_in_gl_df.rename(columns=rename_dict).to_excel(writer, sheet_name='Missing in GL', index=False)
                     suspect_df.drop(columns=['Missing in TB original', 'Missing in GL original']).rename(columns=rename_dict).to_excel(writer, sheet_name='Top 10 Suspects', index=False)
-                st.download_button(label="Download Reconciliation Data", data=buffer_recon.getvalue(), file_name="Reconciliation_Report.xlsx", mime="application/vnd.ms-excel")
+                st.download_button(label="Download Reconciliation Data", data=buffer_recon.getvalue(), file_name="Reconciliation_Report.xlsx", mime="application/vnd.ms-excel", key="btn_download_recon")
 
             with col_e2:
                 st.markdown("##### 📊 Financial Statements (New)")
-                st.caption("สร้างงบการเงินจากข้อมูล FS Mapping — รองรับงบเปรียบเทียบหลายปี")
+                st.caption("สร้างงบการเงินจากข้อมูล FS Mapping")
                 if not company_name: st.warning("กรุณากรอกชื่อบริษัทด้านบน (Company Info) ก่อนสร้างงบ")
                 else:
                     try:
-                        # Package up the equity details to pass to the exporter
-                        eq_details = {
-                            'reg_shares': reg_shares,
-                            'reg_par': reg_par,
-                            'paid_shares': paid_shares,
-                            'paid_par': paid_par
-                        }
+                        eq_details = {'reg_shares': reg_shares, 'reg_par': reg_par, 'paid_shares': paid_shares, 'paid_par': paid_par}
                         fs_bytes = generate_fs_excel(years_data=years_data, company_name=company_name, current_year=current_year_label, prior_year=prior_year_arg, eq_details=eq_details)
-                        safe_name = re.sub(r'[^\w\u0e00-\u0e7f]', '_', company_name)[:30]
-                        st.download_button(label="📊 Download Financial Statements", data=fs_bytes, file_name=f"FS_{safe_name}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
+                        st.download_button(label="📊 Download Financial Statements", data=fs_bytes, file_name=f"FS_{safe_name}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary", key="btn_download_new_fs")
                     except Exception as e: st.error(f"Error generating FS: {e}")
+
+                st.write("")
+                st.markdown("##### 📄 Notes to FS (Text)")
+                st.caption("ดาวน์โหลดไฟล์หมายเหตุประกอบงบ (Text File) แจกแจงรายละเอียดบัญชี")
+                st.download_button(
+                    label="📄 Download Notes (.txt)",
+                    data=notes_text.encode('utf-8-sig'), # Includes BOM so Excel/Word reads Thai perfectly
+                    file_name=f"Notes_{safe_name}.txt",
+                    mime="text/plain",
+                    key="btn_download_notes"
+                )
 
             with col_e3:
                 st.markdown("##### 📄 Legacy FS Template")
-                st.caption("Upload your own template. The system will search for FS Line Items and fill in the adjacent columns.")
+                st.caption("Upload your own template. The system will fill in the adjacent columns.")
                 legacy_template_file = st.file_uploader("Upload FS Template (Excel)", type=["xls", "xlsx"], key="legacy_fs_template")
                 if legacy_template_file:
                     try:
@@ -1162,7 +1201,8 @@ def main():
                         buffer_fs = io.BytesIO()
                         wb.save(buffer_fs)
                         buffer_fs.seek(0)
-                        st.download_button(label="Download Populated Template", data=buffer_fs.getvalue(), file_name=f"Generated_{legacy_template_file.name}", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="download_legacy_fs")
+                        st.download_button(label="Download Populated Template", data=buffer_fs.getvalue(), file_name=f"Generated_{legacy_template_file.name}", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="btn_download_legacy_fs")
                     except Exception as e: st.error(f"Error generating FS: {e}")
                 else: st.info("Please upload an FS template to use this feature.")
+
 main()
