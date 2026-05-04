@@ -10,19 +10,31 @@ from openpyxl.utils import get_column_letter
 import os
 
 FS_LINE_ITEMS = {
-    "เงินสดและรายการเทียบเท่าเงินสด": {"prefixes": ["111"], "keywords": ["เงินสด", "เงินฝาก"]},
-    "ลูกหนี้การค้า": {"prefixes": ["113"], "keywords": ["ลูกหนี้"]},
-    "สินทรัพย์หมุนเวียนอื่น ": {"prefixes": ["115", "119"], "keywords": ["ภาษีถูกหัก", "จ่ายล่วงหน้า"]},
-    "อุปกรณ์-สุทธิ": {"prefixes": ["141", "142"], "keywords": ["เครื่องมือ", "เครื่องจักร", "อุปกรณ์", "ค่าเสื่อม"]},
-    "เจ้าหนี้อื่น": {"prefixes": ["211"], "keywords": ["เจ้าหนี้", "กรมสรรพากร"]},
-    "หนี้สินหมุนเวียนอื่น ": {"prefixes": ["213"], "keywords": ["ภาษีขาย", "ภาษีหัก", "ค้างจ่าย"]},
-    "เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน": {"prefixes": ["2138"], "keywords": ["เงินกู้ยืม"]},
-    "ทุนเรือนหุ้น ": {"prefixes": ["31"], "keywords": ["ทุน"]},
-    "กำไร(ขาดทุน)สะสม": {"prefixes": ["32"], "keywords": ["กำไร"]},
-    "รายได้จากการให้บริการ": {"prefixes": ["41"], "keywords": ["รายได้จากการ"]},
-    "รายได้อื่น": {"prefixes": ["42"], "keywords": ["รายได้อื่น", "ดอกเบี้ย"]},
-    "ต้นทุนการให้บริการ": {"prefixes": ["51"], "keywords": ["ต้นทุน", "ซื้อ"]},
-    "ค่าใช้จ่ายในการขายและบริหาร": {"prefixes": ["52", "53"], "keywords": ["ค่าใช้จ่าย", "เงินเดือน", "ค่าธรรมเนียม", "ค่าเสื่อม", "ค่าเช่า", "ประกัน", "สอบบัญชี", "บริการ"]},
+    # Balance Sheet — Assets (use BS Debit column = งบดุล เดบิต)
+    "เงินสดและรายการเทียบเท่าเงินสด": {"prefixes": ["111"], "keywords": ["เงินสด", "เงินฝาก"], "side": "bs_debit"},
+    "ลูกหนี้การค้า": {"prefixes": ["113"], "keywords": ["ลูกหนี้"], "side": "bs_debit"},
+    "เงินให้กู้ยืมแก่บุคคลที่เกี่ยวข้องกัน": {"prefixes": ["121"], "keywords": ["เงินให้กู้ยืม"], "side": "bs_debit"},
+    "สินทรัพย์หมุนเวียนอื่น ": {"prefixes": ["115", "119", "150"], "keywords": ["ภาษีถูกหัก", "จ่ายล่วงหน้า", "ดอกเบี้ยค้างรับ"], "side": "bs_debit"},
+    "อุปกรณ์-สุทธิ (Gross)": {"prefixes": ["141"], "keywords": ["เครื่องมือ", "เครื่องจักร", "อุปกรณ์สำนักงาน"], "side": "bs_debit"},
+    "ค่าเสื่อมราคาสะสม": {"prefixes": ["142"], "keywords": ["ค่าเสื่อมราคาสะสม"], "side": "bs_credit"},
+    
+    # Balance Sheet — Liabilities (use BS Credit column = งบดุล เครดิต)
+    "เจ้าหนี้การค้า": {"prefixes": ["212"], "keywords": ["เจ้าหนี้การค้า"], "side": "bs_credit"},
+    "เจ้าหนี้อื่น": {"prefixes": ["211", "2131"], "keywords": ["เจ้าหนี้", "ค้างจ่าย", "กรมสรรพากร", "ประกันสังคม", "สอบบัญชี", "ทำบัญชี"], "side": "bs_credit"},
+    "หนี้สินหมุนเวียนอื่น ": {"prefixes": ["2132", "2137"], "keywords": ["ภาษีหัก", "ภงด"], "side": "bs_credit"},
+    "เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน": {"prefixes": ["2138"], "keywords": ["เงินกู้ยืม"], "side": "bs_credit"},
+    
+    # Balance Sheet — Equity (use BS Credit column = งบดุล เครดิต)
+    "ทุนเรือนหุ้น ": {"prefixes": ["31"], "keywords": ["ทุน"], "side": "bs_credit"},
+    "กำไร(ขาดทุน)สะสม": {"prefixes": ["32"], "keywords": ["กำไร"], "side": "bs_debit"},
+    
+    # P&L — Revenue (use PL Credit column = งบกำไรขาดทุน เครดิต)
+    "รายได้จากการให้บริการ": {"prefixes": ["41"], "keywords": ["รายได้จากการ"], "side": "pl_credit"},
+    "รายได้อื่น": {"prefixes": ["42"], "keywords": ["รายได้อื่น", "ดอกเบี้ยรับ"], "side": "pl_credit"},
+    
+    # P&L — Expenses (use PL Debit column = งบกำไรขาดทุน เดบิต)
+    "ต้นทุนการให้บริการ": {"prefixes": ["51"], "keywords": ["ต้นทุน", "ซื้อ"], "side": "pl_debit"},
+    "ค่าใช้จ่ายในการขายและบริหาร": {"prefixes": ["52", "53"], "keywords": ["ค่าใช้จ่าย", "เงินเดือน", "ค่าธรรมเนียม", "ค่าเสื่อม", "ค่าเช่า", "ประกัน", "สอบบัญชี", "บริการ"], "side": "pl_debit"},
 }
 
 
@@ -37,20 +49,24 @@ FS_BS_STRUCTURE = [
     ('header', 'สินทรัพย์หมุนเวียน', None, None),
     ('item',   'เงินสดและรายการเทียบเท่าเงินสด', 4, 'เงินสดและรายการเทียบเท่าเงินสด'),
     ('item',   'ลูกหนี้การค้า', 5, 'ลูกหนี้การค้า'),
+    ('item',   'เงินให้กู้ยืมแก่บุคคลที่เกี่ยวข้องกัน', None, 'เงินให้กู้ยืมแก่บุคคลที่เกี่ยวข้องกัน'),
     ('item',   'สินทรัพย์หมุนเวียนอื่น', 6, 'สินทรัพย์หมุนเวียนอื่น '),
-    ('subtotal','รวมสินทรัพย์หมุนเวียน', None, ['เงินสดและรายการเทียบเท่าเงินสด', 'ลูกหนี้การค้า', 'สินทรัพย์หมุนเวียนอื่น ']),
+    ('subtotal','รวมสินทรัพย์หมุนเวียน', None, ['เงินสดและรายการเทียบเท่าเงินสด', 'ลูกหนี้การค้า', 'เงินให้กู้ยืมแก่บุคคลที่เกี่ยวข้องกัน', 'สินทรัพย์หมุนเวียนอื่น ']),
     ('spacer',  None, None, None),
     ('header', 'สินทรัพย์ไม่หมุนเวียน', None, None),
-    ('item',   'อุปกรณ์-สุทธิ', 7, 'อุปกรณ์-สุทธิ'),
+    ('item',   'อุปกรณ์-สุทธิ (Gross)', None, 'อุปกรณ์-สุทธิ (Gross)'),
+    ('item',   'ค่าเสื่อมราคาสะสม', None, 'ค่าเสื่อมราคาสะสม'),
+    ('subtotal','อุปกรณ์-สุทธิ', 7, ['อุปกรณ์-สุทธิ (Gross)', '-ค่าเสื่อมราคาสะสม']),
     ('subtotal','รวมสินทรัพย์ไม่หมุนเวียน', None, ['อุปกรณ์-สุทธิ']),
     ('subtotal','รวมสินทรัพย์', None, ['รวมสินทรัพย์หมุนเวียน', 'รวมสินทรัพย์ไม่หมุนเวียน']),
     ('spacer',  None, None, None),
     ('header', 'หนี้สินและส่วนของเจ้าของ', None, None),
     ('header', 'หนี้สินหมุนเวียน', None, None),
+    ('item',   'เจ้าหนี้การค้า', None, 'เจ้าหนี้การค้า'),
     ('item',   'เจ้าหนี้หมุนเวียนอื่น', 8, 'เจ้าหนี้อื่น'),
     ('item',   'เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน', 9, 'เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน'),
     ('item',   'หนี้สินหมุนเวียนอื่น', 10, 'หนี้สินหมุนเวียนอื่น '),
-    ('subtotal','รวมหนี้สินหมุนเวียน', None, ['เจ้าหนี้อื่น', 'เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน', 'หนี้สินหมุนเวียนอื่น ']),
+    ('subtotal','รวมหนี้สินหมุนเวียน', None, ['เจ้าหนี้การค้า', 'เจ้าหนี้อื่น', 'เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน', 'หนี้สินหมุนเวียนอื่น ']),
     ('subtotal','รวมหนี้สิน', None, ['รวมหนี้สินหมุนเวียน']),
     ('spacer',  None, None, None),
     ('header', 'ส่วนของเจ้าของ', None, None),
@@ -399,10 +415,12 @@ def parse_tb(excel_file):
     # Read the excel file, skipping the first 4 rows to get to the data
     df = pd.read_excel(excel_file, header=None)
     
-    # Looking for the data starting after header rows.
-    # From previous check, row 3 has 'เลขที่บัญชี', row 4 has 'เดบิต' / 'เครดิต', row 5 is the first data row.
+    # The กระดาษทำการ has 8 columns:
+    # col0=เลขที่บัญชี, col1=ชื่อบัญชี
+    # col2=งบทดลอง เดบิต, col3=งบทดลอง เครดิต
+    # col4=งบกำไรขาดทุน เดบิต, col5=งบกำไรขาดทุน เครดิต
+    # col6=งบดุล เดบิต, col7=งบดุล เครดิต
     
-    # We will just iterate through rows and find where 'เลขที่บัญชี' style data starts
     tb_data = []
     start_reading = False
     
@@ -423,16 +441,30 @@ def parse_tb(excel_file):
                 continue # Skip non-account rows
                 
             acc_name = str(row[1]).strip()
+            
+            # Trial Balance columns (col 2-3)
             debit = float(row[2]) if not pd.isna(row[2]) else 0.0
             credit = float(row[3]) if not pd.isna(row[3]) else 0.0
-            
             net_balance = abs(debit - credit)
+            
+            # P&L columns (col 4-5)
+            pl_debit = float(row[4]) if len(row) > 4 and not pd.isna(row[4]) else 0.0
+            pl_credit = float(row[5]) if len(row) > 5 and not pd.isna(row[5]) else 0.0
+            
+            # BS columns (col 6-7)
+            bs_debit = float(row[6]) if len(row) > 6 and not pd.isna(row[6]) else 0.0
+            bs_credit = float(row[7]) if len(row) > 7 and not pd.isna(row[7]) else 0.0
+            
             tb_data.append({
                 'Account ID': acc_id,
                 'Account Name': acc_name,
                 'TB Debit': debit,
                 'TB Credit': credit,
-                'TB Net Balance': net_balance
+                'TB Net Balance': net_balance,
+                'PL Debit': pl_debit,
+                'PL Credit': pl_credit,
+                'BS Debit': bs_debit,
+                'BS Credit': bs_credit,
             })
             
     return pd.DataFrame(tb_data)
@@ -467,13 +499,12 @@ def parse_tb_working_paper_pdf(pdf_file):
     """Parse กระดาษทำการ (Working Paper) in PDF format.
     
     This PDF has 3 column groups (each with Debit/Credit):
-      1. งบทดลอง   (TB)  — The full trial balance (Debit = Credit for every account)
+      1. งบทดลอง   (TB)  — The full trial balance
       2. งบกำไรขาดทุน (P&L) — P&L accounts only
       3. งบดุล       (BS)  — Balance sheet accounts only
     
-    The net balance for each account is the LAST number printed on that line
-    (either the BS or P&L column, whichever applies).
-    We do NOT use the งบทดลอง pair because Debit always equals Credit there.
+    Each account line has numbers in the TB columns AND in either the
+    BS columns (for accounts 1xxx-3xxx) or the P&L columns (for 4xxx-5xxx).
     """
     doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
     text = ""
@@ -485,7 +516,6 @@ def parse_tb_working_paper_pdf(pdf_file):
     
     for raw_line in lines:
         line = raw_line.rstrip('\r\n')
-        stripped = line.strip()
         
         # Match lines starting with an account ID like '  1111-00'
         match = re.match(r'^\s*(\d{4}-\d{2})\s+(.*)', line)
@@ -500,15 +530,7 @@ def parse_tb_working_paper_pdf(pdf_file):
         if not all_nums:
             continue
         
-        # The LAST number is the net balance (งบดุล or งบกำไรขาดทุน column)
-        net_balance = float(all_nums[-1].replace(',', ''))
-        
-        # Derive a pseudo debit/credit: for BS accounts (1/2/3), treat as debit-normal;
-        # for P&L (4/5), treat as debit-normal. We just store net balance.
-        # For TB Debit/Credit columns, use the first number (งบทดลอง debit side)
-        tb_gross = float(all_nums[0].replace(',', ''))
-        
-        # Extract account name: text between the account ID column and the first number
+        # Extract account name: text between the account ID and the first number
         name_match = re.match(r'^(.+?)(?=\s{3,}[\d,]+\.\d{2})', rest)
         if name_match:
             acc_name = _clean_thai_pdf_text(name_match.group(1).strip())
@@ -517,12 +539,69 @@ def parse_tb_working_paper_pdf(pdf_file):
         else:
             acc_name = "Unknown"
         
+        # Parse numbers based on account type
+        # TB Debit/Credit are always the first number(s)
+        # The LAST number is the BS or PL amount
+        
+        # Determine if this is a debit-normal or credit-normal account
+        is_bs_account = acc_id[0] in ('1', '2', '3')
+        is_debit_normal = acc_id[0] in ('1', '5')  # Assets and Expenses
+        
+        # TB columns
+        tb_debit = 0.0
+        tb_credit = 0.0
+        pl_debit = 0.0
+        pl_credit = 0.0
+        bs_debit = 0.0
+        bs_credit = 0.0
+        
+        if len(all_nums) >= 1:
+            val = float(all_nums[0].replace(',', ''))
+            if is_debit_normal:
+                tb_debit = val
+            else:
+                tb_credit = val
+        
+        # If there are 2+ numbers, the last number is the BS or PL value
+        if len(all_nums) >= 2:
+            last_val = float(all_nums[-1].replace(',', ''))
+            if is_bs_account:
+                if is_debit_normal:  # Assets (1xxx)
+                    bs_debit = last_val
+                else:  # Liabilities (2xxx), Equity (3xxx)
+                    bs_credit = last_val
+            else:
+                # P&L accounts (4xxx = Revenue = Credit, 5xxx = Expense = Debit)
+                if acc_id[0] == '4':
+                    pl_credit = last_val
+                else:
+                    pl_debit = last_val
+        elif len(all_nums) == 1:
+            # Only one number - it's both the TB and the BS/PL value
+            val = float(all_nums[0].replace(',', ''))
+            if is_bs_account:
+                if is_debit_normal:
+                    bs_debit = val
+                else:
+                    bs_credit = val
+            else:
+                if acc_id[0] == '4':
+                    pl_credit = val
+                else:
+                    pl_debit = val
+        
+        net_balance = abs(tb_debit - tb_credit)
+        
         tb_data.append({
             'Account ID': acc_id,
             'Account Name': acc_name,
-            'TB Debit': net_balance,   # Net balance stored as debit for compatibility
-            'TB Credit': 0.0,
-            'TB Net Balance': net_balance
+            'TB Debit': tb_debit,
+            'TB Credit': tb_credit,
+            'TB Net Balance': net_balance,
+            'PL Debit': pl_debit,
+            'PL Credit': pl_credit,
+            'BS Debit': bs_debit,
+            'BS Credit': bs_credit,
         })
     
     return pd.DataFrame(tb_data)
@@ -632,13 +711,18 @@ def main():
     st.title("GL & TB Reconciliation Tool")
     st.markdown("Upload your General Ledger (PDF), Trial Balance (Excel), and optionally Trial Balance (PDF) to verify Brought Forward balances.")
     
+    # Use extracted GL values as widget defaults (set BEFORE widgets render)
+    default_company = st.session_state.get('_gl_extracted_company', '')
+    default_year = st.session_state.get('_gl_extracted_year', 'พ.ศ. 2568')
+    default_prior_year = st.session_state.get('_gl_extracted_prior_year', 'พ.ศ. 2567')
+    
     # Company info for FS generation
     with st.expander("ข้อมูลบริษัท / Company Info (สำหรับสร้างงบการเงิน)", expanded=False):
         col_ci1, col_ci2, col_ci3, col_ci4 = st.columns([3, 1, 1, 1])
         with col_ci1:
-            company_name = st.text_input("ชื่อบริษัท", placeholder="บริษัท xxxxxxx จำกัด", key='company_name')
+            company_name = st.text_input("ชื่อบริษัท", value=default_company, placeholder="บริษัท xxxxxxx จำกัด", key='company_name')
         with col_ci2:
-            current_year_label = st.text_input("ปีปัจจุบัน", value="พ.ศ. 2568", key='current_year_label')
+            current_year_label = st.text_input("ปีปัจจุบัน", value=default_year, key='current_year_label')
         with col_ci3:
             fs_shares = st.number_input("จำนวนหุ้น", min_value=0, value=0, step=1000, key='fs_shares')
         with col_ci4:
@@ -656,7 +740,7 @@ def main():
     with st.expander("📊 อัปโหลดกระดาษทำการปีก่อนหน้า (สำหรับสร้างงบเปรียบเทียบ)", expanded=False):
         col_py1, col_py2 = st.columns([1, 2])
         with col_py1:
-            prior_year_label = st.text_input("ปีก่อนหน้า", value="พ.ศ. 2567", key='prior_year_label')
+            prior_year_label = st.text_input("ปีก่อนหน้า", value=default_prior_year, key='prior_year_label')
         with col_py2:
             prior_tb_file = st.file_uploader("Upload Prior Year กระดาษทำการ (Excel or PDF)", type=["xls", "xlsx", "pdf"], key='prior_tb_upload')
         
@@ -686,16 +770,26 @@ def main():
             # Parse GL
             try:
                 gl_df, extracted_company, extracted_year = parse_gl(gl_file)
+                # Store extracted values for widget defaults on next render
                 if extracted_company:
-                    st.session_state['company_name'] = extracted_company
+                    st.session_state['_gl_extracted_company'] = extracted_company
+                    # Override local variable so FS generation works this run
+                    if not company_name:
+                        company_name = extracted_company
                 if extracted_year:
-                    st.session_state['current_year_label'] = extracted_year
-                    # Calculate prior year automatically if possible
+                    st.session_state['_gl_extracted_year'] = extracted_year
+                    if current_year_label == 'พ.ศ. 2568' or not current_year_label:
+                        current_year_label = extracted_year
+                    # Calculate prior year automatically
                     try:
                         yr_int = int(re.search(r'\d{4}', extracted_year).group())
-                        st.session_state['prior_year_label'] = f"พ.ศ. {yr_int - 1}"
+                        prior_yr = f"พ.ศ. {yr_int - 1}"
+                        st.session_state['_gl_extracted_prior_year'] = prior_yr
+                        if prior_year_label == 'พ.ศ. 2567' or not prior_year_label:
+                            prior_year_label = prior_yr
                     except:
                         pass
+                st.info(f"📋 ข้อมูลจาก GL: **{extracted_company}** | ปี: **{extracted_year}**")
             except Exception as e:
                 st.error(f"Error reading GL PDF file: {e}")
                 return
@@ -741,6 +835,11 @@ def main():
             merged_df['GL Credit'] = merged_df['GL Credit'].fillna(0)
             merged_df['TB Brought Forward Net'] = merged_df['TB Brought Forward Net'].fillna(0)
             merged_df['Account Name'] = merged_df['Account Name'].fillna("Unknown")
+            # New columns from กระดาษทำการ
+            for col in ['PL Debit', 'PL Credit', 'BS Debit', 'BS Credit']:
+                if col not in merged_df.columns:
+                    merged_df[col] = 0.0
+                merged_df[col] = merged_df[col].fillna(0)
             
             # Calculate Differences
             # Floating point comparison using a small tolerance (e.g. 0.02)
@@ -866,10 +965,25 @@ def main():
 
         with tab_map:
             st.write("Review the auto-mapped Financial Statement Line Items. You can edit them directly in the table below.")
-            st.info("The tool auto-guessed the line item based on Account ID and Name. Adjust any 'Unmapped' or incorrect items before exporting.")
+            st.info("💡 **FS Value** คือตัวเลขที่จะถูกนำไปใช้สร้างงบการเงิน (จากงบดุล/งบกำไรขาดทุน ตามประเภทบัญชี) — สามารถแก้ไขได้ทั้ง FS Line Item และ FS Value")
 
-            # Show editor
-            mapping_df = merged_df[['Account ID', 'Account Name', 'TB Net Balance', 'FS Line Item']].copy()
+            # Compute the FS Value column: the correct amount that will be used in FS generation
+            def get_fs_value(row):
+                fs_line = row.get('FS Line Item', '')
+                rules = FS_LINE_ITEMS.get(fs_line, {})
+                side = rules.get('side', 'bs_debit')
+                col_map = {
+                    'bs_debit': 'BS Debit',
+                    'bs_credit': 'BS Credit',
+                    'pl_debit': 'PL Debit',
+                    'pl_credit': 'PL Credit',
+                }
+                col = col_map.get(side, 'TB Net Balance')
+                return row.get(col, row.get('TB Net Balance', 0.0))
+            
+            mapping_df = merged_df[['Account ID', 'Account Name', 'TB Net Balance', 'BS Debit', 'BS Credit', 'PL Debit', 'PL Credit', 'FS Line Item']].copy()
+            mapping_df['FS Value'] = merged_df.apply(get_fs_value, axis=1)
+            
             edited_mapping = st.data_editor(
                 mapping_df,
                 column_config={
@@ -880,28 +994,41 @@ def main():
                         options=list(FS_LINE_ITEMS.keys()) + ["ไม่จัดประเภท (Unmapped)"],
                         required=True,
                     ),
-                    "TB Net Balance": num_config
+                    "TB Net Balance": st.column_config.NumberColumn("TB Net Balance", format="%,.2f"),
+                    "BS Debit": st.column_config.NumberColumn("งบดุล เดบิต", format="%,.2f"),
+                    "BS Credit": st.column_config.NumberColumn("งบดุล เครดิต", format="%,.2f"),
+                    "PL Debit": st.column_config.NumberColumn("งบกำไรขาดทุน เดบิต", format="%,.2f"),
+                    "PL Credit": st.column_config.NumberColumn("งบกำไรขาดทุน เครดิต", format="%,.2f"),
+                    "FS Value": st.column_config.NumberColumn("📊 FS Value (ใช้สร้างงบ)", format="%,.2f"),
                 },
-                disabled=["Account ID", "Account Name", "TB Net Balance"],
+                disabled=["Account ID", "Account Name", "TB Net Balance", "FS Value"],
                 use_container_width=True,
                 key="mapping_editor"
             )
 
             # Update merged_df with the edited mapping
             merged_df['FS Line Item'] = edited_mapping['FS Line Item']
+            # Also update the editable BS/PL columns back
+            for col in ['BS Debit', 'BS Credit', 'PL Debit', 'PL Credit']:
+                merged_df[col] = edited_mapping[col]
 
-            # Show live preview of the generated FS with inline breakdown
+            # Show live preview of the generated FS using correct columns
             st.subheader("Financial Statement Preview")
             st.write("Click on any line item to see the accounts that make up its total.")
-            fs_preview = merged_df.groupby('FS Line Item')['TB Net Balance'].sum().reset_index()
-
-            for _, row in fs_preview.iterrows():
-                fs_line = row['FS Line Item']
-                total = row['TB Net Balance']
-                if pd.notna(fs_line) and fs_line != "ไม่จัดประเภท (Unmapped)":
-                    with st.expander(f"**{fs_line}** — Total: **{total:,.2f}**"):
-                        line_items_df = merged_df[merged_df['FS Line Item'] == fs_line][['Account ID', 'Account Name', 'TB Net Balance']].reset_index(drop=True)
-                        st.dataframe(line_items_df, use_container_width=True, column_config={'TB Net Balance': num_config})
+            
+            for fs_line, rules in FS_LINE_ITEMS.items():
+                side = rules.get('side', 'bs_debit')
+                col_map = {'bs_debit': 'BS Debit', 'bs_credit': 'BS Credit', 'pl_debit': 'PL Debit', 'pl_credit': 'PL Credit'}
+                col = col_map.get(side, 'TB Net Balance')
+                mask = merged_df['FS Line Item'] == fs_line
+                line_df = merged_df[mask]
+                if line_df.empty:
+                    continue
+                total = line_df[col].sum() if col in line_df.columns else line_df['TB Net Balance'].sum()
+                side_label = {"bs_debit": "งบดุล เดบิต", "bs_credit": "งบดุล เครดิต", "pl_debit": "งบกำไรขาดทุน เดบิต", "pl_credit": "งบกำไรขาดทุน เครดิต"}.get(side, "")
+                with st.expander(f"**{fs_line}** — Total: **{total:,.2f}** ({side_label})"):
+                    display_cols = ['Account ID', 'Account Name', col]
+                    st.dataframe(line_df[display_cols].reset_index(drop=True), use_container_width=True, column_config={col: num_config})
 
             # Show unmapped items if any
             unmapped = merged_df[merged_df['FS Line Item'] == "ไม่จัดประเภท (Unmapped)"]
@@ -914,8 +1041,30 @@ def main():
         with tab_export:
             st.write("Download your reconciled data or generate the finalized Financial Statements.")
 
-            # Current year FS data from the mapping
-            fs_summary_current = edited_mapping.groupby('FS Line Item')['TB Net Balance'].sum().to_dict()
+            # Current year FS data from the mapping — use correct column per FS Line Item
+            def compute_fs_summary(df):
+                """Compute FS summary using the correct column for each FS line item."""
+                summary = {}
+                for fs_line, rules in FS_LINE_ITEMS.items():
+                    side = rules.get('side', 'bs_debit')
+                    # Map side to the correct DataFrame column
+                    col_map = {
+                        'bs_debit': 'BS Debit',
+                        'bs_credit': 'BS Credit',
+                        'pl_debit': 'PL Debit',
+                        'pl_credit': 'PL Credit',
+                    }
+                    col = col_map.get(side, 'TB Net Balance')
+                    mask = df['FS Line Item'] == fs_line
+                    if col in df.columns:
+                        summary[fs_line] = df.loc[mask, col].sum()
+                    else:
+                        # Fallback to TB Net Balance if column not available
+                        summary[fs_line] = df.loc[mask, 'TB Net Balance'].sum()
+                return summary
+            
+            fs_summary_current = compute_fs_summary(edited_mapping)
+            # Remove unmapped
             fs_summary_current.pop('ไม่จัดประเภท (Unmapped)', None)
 
             # Prepare years_data dict
@@ -933,7 +1082,7 @@ def main():
                         prior_tb_df = parse_tb(prior_tb_file)
                     if not prior_tb_df.empty:
                         prior_tb_df['FS Line Item'] = prior_tb_df.apply(auto_map, axis=1)
-                        prior_summary = prior_tb_df.groupby('FS Line Item')['TB Net Balance'].sum().to_dict()
+                        prior_summary = compute_fs_summary(prior_tb_df)
                         prior_summary.pop('ไม่จัดประเภท (Unmapped)', None)
                         years_data[prior_year_label] = prior_summary
                         prior_year_arg = prior_year_label
