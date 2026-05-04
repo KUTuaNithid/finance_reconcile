@@ -5,6 +5,8 @@ import re
 import io
 import math
 import openpyxl
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side, numbers as xl_numbers
+from openpyxl.utils import get_column_letter
 import os
 
 FS_LINE_ITEMS = {
@@ -23,19 +25,315 @@ FS_LINE_ITEMS = {
     "ค่าใช้จ่ายในการขายและบริหาร": {"prefixes": ["52", "53"], "keywords": ["ค่าใช้จ่าย", "เงินเดือน", "ค่าธรรมเนียม", "ค่าเสื่อม", "ค่าเช่า", "ประกัน", "สอบบัญชี", "บริการ"]},
 }
 
-FS_CELLS = {
-    "เงินสดและรายการเทียบเท่าเงินสด": {"sheet": "สินทรัพย์", "cell": "C9"},
-    "ลูกหนี้การค้า": {"sheet": "สินทรัพย์", "cell": "C10"},
-    "สินทรัพย์หมุนเวียนอื่น ": {"sheet": "สินทรัพย์", "cell": "C11"},
-    "อุปกรณ์-สุทธิ": {"sheet": "สินทรัพย์", "cell": "C15"},
-    "เจ้าหนี้อื่น": {"sheet": "สินทรัพย์", "cell": "C42"},
-    "เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน": {"sheet": "สินทรัพย์", "cell": "C43"},
-    "หนี้สินหมุนเวียนอื่น ": {"sheet": "สินทรัพย์", "cell": "C44"},
-    "รายได้จากการให้บริการ": {"sheet": "กำไรขาดทุน", "cell": "D8"},
-    "รายได้อื่น": {"sheet": "กำไรขาดทุน", "cell": "D9"},
-    "ต้นทุนการให้บริการ": {"sheet": "กำไรขาดทุน", "cell": "D13"},
-    "ค่าใช้จ่ายในการขายและบริหาร": {"sheet": "กำไรขาดทุน", "cell": "D14"},
-}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FS STRUCTURE: ordered line items with note numbers and section metadata
+# ──────────────────────────────────────────────────────────────────────────────
+FS_BS_STRUCTURE = [
+    # (type, label, note, mapped_key)
+    # type: 'header' | 'item' | 'subtotal' | 'spacer'
+    ('header', 'สินทรัพย์', None, None),
+    ('header', 'สินทรัพย์หมุนเวียน', None, None),
+    ('item',   'เงินสดและรายการเทียบเท่าเงินสด', 4, 'เงินสดและรายการเทียบเท่าเงินสด'),
+    ('item',   'ลูกหนี้การค้า', 5, 'ลูกหนี้การค้า'),
+    ('item',   'สินทรัพย์หมุนเวียนอื่น', 6, 'สินทรัพย์หมุนเวียนอื่น '),
+    ('subtotal','รวมสินทรัพย์หมุนเวียน', None, ['เงินสดและรายการเทียบเท่าเงินสด', 'ลูกหนี้การค้า', 'สินทรัพย์หมุนเวียนอื่น ']),
+    ('spacer',  None, None, None),
+    ('header', 'สินทรัพย์ไม่หมุนเวียน', None, None),
+    ('item',   'อุปกรณ์-สุทธิ', 7, 'อุปกรณ์-สุทธิ'),
+    ('subtotal','รวมสินทรัพย์ไม่หมุนเวียน', None, ['อุปกรณ์-สุทธิ']),
+    ('subtotal','รวมสินทรัพย์', None, ['รวมสินทรัพย์หมุนเวียน', 'รวมสินทรัพย์ไม่หมุนเวียน']),
+    ('spacer',  None, None, None),
+    ('header', 'หนี้สินและส่วนของเจ้าของ', None, None),
+    ('header', 'หนี้สินหมุนเวียน', None, None),
+    ('item',   'เจ้าหนี้หมุนเวียนอื่น', 8, 'เจ้าหนี้อื่น'),
+    ('item',   'เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน', 9, 'เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน'),
+    ('item',   'หนี้สินหมุนเวียนอื่น', 10, 'หนี้สินหมุนเวียนอื่น '),
+    ('subtotal','รวมหนี้สินหมุนเวียน', None, ['เจ้าหนี้อื่น', 'เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน', 'หนี้สินหมุนเวียนอื่น ']),
+    ('subtotal','รวมหนี้สิน', None, ['รวมหนี้สินหมุนเวียน']),
+    ('spacer',  None, None, None),
+    ('header', 'ส่วนของเจ้าของ', None, None),
+    ('item',   'ทุนเรือนหุ้น', None, 'ทุนเรือนหุ้น '),
+    ('item',   'กำไร(ขาดทุน)สะสม', None, 'กำไร(ขาดทุน)สะสม'),
+    ('subtotal','รวมส่วนของเจ้าของ', None, ['ทุนเรือนหุ้น ', 'กำไร(ขาดทุน)สะสม']),
+    ('subtotal','รวมหนี้สินและส่วนของเจ้าของ', None, ['รวมหนี้สิน', 'รวมส่วนของเจ้าของ']),
+]
+
+FS_PL_STRUCTURE = [
+    ('header',  'รายได้', None, None),
+    ('item',    'รายได้จากการให้บริการ', None, 'รายได้จากการให้บริการ'),
+    ('item',    'รายได้อื่น', None, 'รายได้อื่น'),
+    ('subtotal','รวมรายได้', None, ['รายได้จากการให้บริการ', 'รายได้อื่น']),
+    ('spacer',  None, None, None),
+    ('header',  'ค่าใช้จ่าย', None, None),
+    ('item',    'ต้นทุนการให้บริการ', None, 'ต้นทุนการให้บริการ'),
+    ('item',    'ค่าใช้จ่ายในการขายและบริหาร', None, 'ค่าใช้จ่ายในการขายและบริหาร'),
+    ('subtotal','รวมค่าใช้จ่าย', None, ['ต้นทุนการให้บริการ', 'ค่าใช้จ่ายในการขายและบริหาร']),
+    ('subtotal','กำไร(ขาดทุน)สุทธิ', None, ['รวมรายได้', '-รวมค่าใช้จ่าย']),
+]
+
+
+def build_fs_from_mapping(fs_mapping: dict, structure: list) -> dict:
+    """Compute all line item values and subtotals from a {label: amount} mapping.
+    Returns a dict {label: computed_value} for every row in structure."""
+    computed = {}
+    for row_type, label, note, key in structure:
+        if row_type == 'item':
+            computed[label] = fs_mapping.get(key, 0.0) if key else 0.0
+        elif row_type == 'subtotal' and isinstance(key, list):
+            total = 0.0
+            for k in key:
+                if k.startswith('-'):
+                    total -= computed.get(k[1:], 0.0)
+                else:
+                    total += computed.get(k, 0.0)
+            computed[label] = total
+        else:
+            computed[label] = None
+    return computed
+
+
+def _apply_cell_style(cell, bold=False, italic=False, indent=0,
+                      bg=None, border_top=False, border_bottom=False,
+                      number_format=None, align='left'):
+    cell.font = Font(name='Cordia New', size=14, bold=bold, italic=italic)
+    cell.alignment = Alignment(horizontal=align, vertical='center', indent=indent, wrap_text=False)
+    if bg:
+        cell.fill = PatternFill('solid', fgColor=bg)
+    if number_format:
+        cell.number_format = number_format
+    thin = Side(style='thin')
+    double = Side(style='double')
+    cell.border = Border(
+        top=double if border_top else None,
+        bottom=double if border_bottom else None,
+    )
+
+
+def _write_fs_sheet(ws, structure, years_computed, year_labels,
+                   company_name, statement_title, period_label):
+    """Write a single FS sheet (BS or P&L) into an openpyxl worksheet."""
+    NUM_FMT = '#,##0.00;[Red]-#,##0.00'
+    HDR_FILL = 'DDEEFF'
+    SUBTOT_FILL = 'F0F4F8'
+
+    # ── Column widths ──
+    ws.column_dimensions['A'].width = 42
+    ws.column_dimensions['B'].width = 10
+    for i, _ in enumerate(year_labels):
+        col = get_column_letter(3 + i * 2)   # C, E, G …
+        ws.column_dimensions[col].width = 18
+        ws.column_dimensions[get_column_letter(4 + i * 2)].width = 2  # spacer
+
+    row = 1
+    # ── Header block ──
+    ws.row_dimensions[row].height = 20
+    ws.cell(row, 1, company_name)
+    _apply_cell_style(ws.cell(row, 1), bold=True)
+    row += 1
+    ws.cell(row, 1, statement_title)
+    _apply_cell_style(ws.cell(row, 1), bold=True)
+    row += 1
+    ws.cell(row, 1, period_label)
+    _apply_cell_style(ws.cell(row, 1))
+    row += 1
+    ws.cell(row, 1, 'หน่วย : บาท')
+    _apply_cell_style(ws.cell(row, 1), italic=True)
+    row += 1
+
+    # ── Year column headers ──
+    ws.row_dimensions[row].height = 18
+    for i, lbl in enumerate(year_labels):
+        col = 3 + i * 2
+        c = ws.cell(row, col, lbl)
+        _apply_cell_style(c, bold=True, align='center')
+    row += 1
+
+    # ── Data rows ──
+    for row_type, label, note, key in structure:
+        ws.row_dimensions[row].height = 18
+        if row_type == 'spacer':
+            row += 1
+            continue
+
+        is_header = row_type == 'header'
+        is_subtotal = row_type == 'subtotal'
+        is_grand = label and label.startswith('รวม') and 'สินทรัพย์' in label and 'ไม่' not in label and 'หมุนเวียน' not in label
+        indent = 0 if is_header else (1 if is_subtotal else 2)
+
+        # Label cell
+        c = ws.cell(row, 1, label)
+        _apply_cell_style(c, bold=(is_header or is_subtotal), indent=indent,
+                          bg=HDR_FILL if is_header else (SUBTOT_FILL if is_subtotal else None))
+
+        # Note cell
+        if note:
+            nc = ws.cell(row, 2, note)
+            _apply_cell_style(nc, align='center')
+
+        # Value cells
+        for i, lbl in enumerate(year_labels):
+            col = 3 + i * 2
+            val = years_computed[lbl].get(label) if label else None
+            vc = ws.cell(row, col, val if val is not None else None)
+            _apply_cell_style(vc, bold=is_subtotal,
+                              bg=SUBTOT_FILL if is_subtotal else None,
+                              number_format=NUM_FMT, align='right',
+                              border_top=is_subtotal,
+                              border_bottom=(is_subtotal and 'รวม' in (label or '') and 'ทั้งหมด' not in (label or '')))
+        row += 1
+
+    # Footer
+    ws.row_dimensions[row].height = 14
+    ws.cell(row, 1, 'หมายเหตุประกอบงบการเงินเป็นส่วนหนึ่งของงบการเงินนี้')
+    _apply_cell_style(ws.cell(row, 1), italic=True)
+
+
+def generate_fs_excel(years_data: dict, company_name: str,
+                      current_year: str, prior_year: str = None,
+                      registered_capital: float = 0,
+                      shares: int = 0, par_value: float = 0) -> bytes:
+    """
+    Generate a clean standalone Financial Statement Excel workbook.
+
+    years_data: {year_label: {FS_LINE_ITEM: amount}}
+    Returns bytes of the .xlsx file.
+    """
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)  # remove default empty sheet
+
+    year_labels = [current_year]
+    if prior_year and prior_year in years_data:
+        year_labels.append(prior_year)
+
+    # ── Compute BS and P&L for each year ──
+    bs_computed = {}   # {year_label: {row_label: value}}
+    pl_computed = {}   # {year_label: {row_label: value}}
+    for yl in year_labels:
+        mapping = years_data.get(yl, {})
+        pl_vals = build_fs_from_mapping(mapping, FS_PL_STRUCTURE)
+        # Add net profit into retained earnings for BS
+        net_profit = pl_vals.get('กำไร(ขาดทุน)สุทธิ', 0.0) or 0.0
+        mapping_bs = dict(mapping)
+        mapping_bs['กำไร(ขาดทุน)สะสม'] = mapping.get('กำไร(ขาดทุน)สะสม', 0.0) + net_profit
+        bs_computed[yl] = build_fs_from_mapping(mapping_bs, FS_BS_STRUCTURE)
+        pl_computed[yl] = pl_vals
+
+    # ── Sheet 1: งบฐานะการเงิน ──
+    ws_bs = wb.create_sheet('งบฐานะการเงิน')
+    _write_fs_sheet(ws_bs, FS_BS_STRUCTURE, bs_computed, year_labels,
+                    company_name,
+                    'งบฐานะการเงิน',
+                    f'ณ วันที่ 31 ธันวาคม {current_year}')
+
+    # ── Sheet 2: งบกำไรขาดทุน ──
+    ws_pl = wb.create_sheet('งบกำไรขาดทุน')
+    _write_fs_sheet(ws_pl, FS_PL_STRUCTURE, pl_computed, year_labels,
+                    company_name,
+                    'งบกำไรขาดทุน',
+                    f'สำหรับปีสิ้นสุดวันที่ 31 ธันวาคม {current_year}')
+
+    # ── Sheet 3: งบส่วนของเจ้าของ ──
+    _write_equity_sheet(wb, company_name, current_year, prior_year,
+                        bs_computed, pl_computed, year_labels,
+                        registered_capital, shares, par_value)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def _write_equity_sheet(wb, company_name, current_year, prior_year,
+                        bs_computed, pl_computed, year_labels,
+                        registered_capital, shares, par_value):
+    """Write งบการเปลี่ยนแปลงส่วนของเจ้าของ sheet."""
+    ws = wb.create_sheet('งบส่วนของเจ้าของ')
+    ws.column_dimensions['A'].width = 46
+    ws.column_dimensions['B'].width = 2
+    ws.column_dimensions['C'].width = 2
+    ws.column_dimensions['D'].width = 18
+    ws.column_dimensions['E'].width = 2
+    ws.column_dimensions['F'].width = 18
+    ws.column_dimensions['G'].width = 2
+    ws.column_dimensions['H'].width = 18
+    NUM_FMT = '#,##0.00;[Red]-#,##0.00'
+
+    def wc(r, c, v=None, bold=False, align='left', num=False, italic=False):
+        cell = ws.cell(r, c, v)
+        cell.font = Font(name='Cordia New', size=14, bold=bold, italic=italic)
+        cell.alignment = Alignment(horizontal=align, vertical='center')
+        if num and v is not None:
+            cell.number_format = NUM_FMT
+        return cell
+
+    r = 1
+    wc(r, 1, company_name, bold=True); r += 1
+    wc(r, 1, 'งบการเปลี่ยนแปลงส่วนของเจ้าของ', bold=True); r += 1
+    wc(r, 1, f'สำหรับปีสิ้นสุดวันที่ 31 ธันวาคม {current_year}'); r += 1
+    wc(r, 1, 'หน่วย : บาท', italic=True); r += 1
+    r += 1  # spacer
+
+    # Column headers
+    wc(r, 1, None)
+    wc(r, 4, 'ทุนที่ออกและ', bold=True, align='center')
+    wc(r, 6, 'กำไร(ขาดทุน)', bold=True, align='center')
+    wc(r, 8, 'รวมส่วนของ', bold=True, align='center'); r += 1
+    wc(r, 4, 'เรียกชำระแล้ว', bold=True, align='center')
+    wc(r, 6, 'สะสม', bold=True, align='center')
+    wc(r, 8, 'เจ้าของ', bold=True, align='center'); r += 1
+
+    # Get values
+    def get_pl(yl, key):
+        return pl_computed.get(yl, {}).get(key, 0.0) or 0.0
+    def get_bs(yl, key):
+        return bs_computed.get(yl, {}).get(key, 0.0) or 0.0
+
+    if prior_year and prior_year in bs_computed:
+        # Prior year opening (assume zero start if only 1 year)
+        prior_capital = get_bs(prior_year, 'ทุนเรือนหุ้น') or (shares * par_value)
+        prior_retained = get_bs(prior_year, 'กำไร(ขาดทุน)สะสม') - get_pl(prior_year, 'กำไร(ขาดทุน)สุทธิ')
+        prior_net = get_pl(prior_year, 'กำไร(ขาดทุน)สุทธิ')
+
+        wc(r, 1, f'ยอด ณ วันต้นปี {prior_year}', bold=True)
+        wc(r, 4, prior_capital, num=True, align='right')
+        wc(r, 6, prior_retained, num=True, align='right')
+        wc(r, 8, prior_capital + prior_retained, num=True, align='right'); r += 1
+        wc(r, 1, 'กำไร(ขาดทุน)สุทธิสำหรับปี')
+        wc(r, 6, prior_net, num=True, align='right')
+        wc(r, 8, prior_net, num=True, align='right'); r += 1
+        prior_end_cap = prior_capital
+        prior_end_ret = prior_retained + prior_net
+        wc(r, 1, f'ยอดคงเหลือ ณ สิ้นปี {prior_year}', bold=True)
+        wc(r, 4, prior_end_cap, num=True, align='right')
+        wc(r, 6, prior_end_ret, num=True, align='right')
+        wc(r, 8, prior_end_cap + prior_end_ret, num=True, align='right'); r += 1
+        r += 1
+        cur_capital_open = prior_end_cap
+        cur_retained_open = prior_end_ret
+    else:
+        cur_capital_open = shares * par_value if shares and par_value else 0
+        cur_retained_open = 0
+
+    cur_net = get_pl(current_year, 'กำไร(ขาดทุน)สุทธิ')
+    cur_capital = get_bs(current_year, 'ทุนเรือนหุ้น') or (shares * par_value)
+
+    wc(r, 1, f'ยอด ณ วันต้นปี {current_year}', bold=True)
+    wc(r, 4, cur_capital_open, num=True, align='right')
+    wc(r, 6, cur_retained_open, num=True, align='right')
+    wc(r, 8, cur_capital_open + cur_retained_open, num=True, align='right'); r += 1
+    wc(r, 1, 'กำไร(ขาดทุน)สุทธิสำหรับปี')
+    wc(r, 6, cur_net, num=True, align='right')
+    wc(r, 8, cur_net, num=True, align='right'); r += 1
+    cur_end_ret = cur_retained_open + cur_net
+    wc(r, 1, f'ยอดคงเหลือ ณ สิ้นปี {current_year}', bold=True)
+    wc(r, 4, cur_capital, num=True, align='right')
+    wc(r, 6, cur_end_ret, num=True, align='right')
+    wc(r, 8, cur_capital + cur_end_ret, num=True, align='right'); r += 1
+    r += 1
+    wc(r, 1, 'หมายเหตุประกอบงบการเงินเป็นส่วนหนึ่งของงบการเงินนี้', italic=True)
+
 
 def auto_map(row):
     acc_id = str(row.get('Account ID', ''))
@@ -94,7 +392,8 @@ def parse_tb_pdf(pdf_file):
                     
     return pd.DataFrame(tb_bf_data)
 
-st.set_page_config(page_title="GL & TB Reconciler", layout="wide")
+st.set_page_config(page_title="Finance Reconcile", layout="wide", page_icon="📊")
+
 
 def parse_tb(excel_file):
     # Read the excel file, skipping the first 4 rows to get to the data
@@ -237,6 +536,21 @@ def parse_gl(pdf_file):
         
     lines = text.split('\n')
     
+    # Extract Company Name and Year
+    extracted_company = ""
+    extracted_year = ""
+    for i in range(min(10, len(lines))):
+        line = lines[i].strip()
+        if "บริษัท" in line and not extracted_company:
+            # Capture everything up to "หนา" or a bunch of spaces
+            match_comp = re.split(r'\s{3,}|\t|หน้า|หนา', line)
+            extracted_company = match_comp[0].strip()
+        if "วันที่จาก" in line and not extracted_year:
+            # e.g., วันที่จาก       1 ม.ค. 2568      ถึง   31 ธ.ค. 2568
+            match_yr = re.search(r'(25\d{2})', line)
+            if match_yr:
+                extracted_year = "พ.ศ. " + match_yr.group(1)
+                
     gl_data = []
     current_acc_id = None
     
@@ -310,11 +624,25 @@ def parse_gl(pdf_file):
                 else:
                     existing['GL Net Balance'] = abs(debit_val - credit_val)
                     
-    return pd.DataFrame(gl_data)
+    return pd.DataFrame(gl_data), extracted_company, extracted_year
+
+
 
 def main():
     st.title("GL & TB Reconciliation Tool")
     st.markdown("Upload your General Ledger (PDF), Trial Balance (Excel), and optionally Trial Balance (PDF) to verify Brought Forward balances.")
+    
+    # Company info for FS generation
+    with st.expander("ข้อมูลบริษัท / Company Info (สำหรับสร้างงบการเงิน)", expanded=False):
+        col_ci1, col_ci2, col_ci3, col_ci4 = st.columns([3, 1, 1, 1])
+        with col_ci1:
+            company_name = st.text_input("ชื่อบริษัท", placeholder="บริษัท xxxxxxx จำกัด", key='company_name')
+        with col_ci2:
+            current_year_label = st.text_input("ปีปัจจุบัน", value="พ.ศ. 2568", key='current_year_label')
+        with col_ci3:
+            fs_shares = st.number_input("จำนวนหุ้น", min_value=0, value=0, step=1000, key='fs_shares')
+        with col_ci4:
+            fs_par = st.number_input("มูลค่าหุ้นละ (บาท)", min_value=0.0, value=0.0, step=1.0, key='fs_par')
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -323,13 +651,26 @@ def main():
         gl_file = st.file_uploader("Upload General Ledger / บัญชีแยกประเภท (PDF)", type=["pdf"])
     with col3:
         tb_pdf_file = st.file_uploader("Upload Trial Balance for BF Check / งบทดลอง (PDF)", type=["pdf"])
+    
+    # Prior year TB upload for FS generation
+    with st.expander("📊 อัปโหลดกระดาษทำการปีก่อนหน้า (สำหรับสร้างงบเปรียบเทียบ)", expanded=False):
+        col_py1, col_py2 = st.columns([1, 2])
+        with col_py1:
+            prior_year_label = st.text_input("ปีก่อนหน้า", value="พ.ศ. 2567", key='prior_year_label')
+        with col_py2:
+            prior_tb_file = st.file_uploader("Upload Prior Year กระดาษทำการ (Excel or PDF)", type=["xls", "xlsx", "pdf"], key='prior_tb_upload')
         
-    if st.button("Run Reconciliation", type="primary"):
+    run_clicked = st.button("Run Reconciliation", type="primary")
+    should_process = False
+    if run_clicked:
         if not tb_file or not gl_file:
             st.error("Please upload both files first.")
             return
-            
+        should_process = True
+
+    if should_process:
         with st.spinner("Processing files... This may take a moment."):
+            
             # Parse TB (support both Excel and PDF กระดาษทำการ)
             try:
                 tb_filename = tb_file.name.lower()
@@ -344,7 +685,17 @@ def main():
                 
             # Parse GL
             try:
-                gl_df = parse_gl(gl_file)
+                gl_df, extracted_company, extracted_year = parse_gl(gl_file)
+                if extracted_company:
+                    st.session_state['company_name'] = extracted_company
+                if extracted_year:
+                    st.session_state['current_year_label'] = extracted_year
+                    # Calculate prior year automatically if possible
+                    try:
+                        yr_int = int(re.search(r'\d{4}', extracted_year).group())
+                        st.session_state['prior_year_label'] = f"พ.ศ. {yr_int - 1}"
+                    except:
+                        pass
             except Exception as e:
                 st.error(f"Error reading GL PDF file: {e}")
                 return
@@ -424,189 +775,284 @@ def main():
             merged_df['Max Absolute Balance'] = merged_df[['TB Net Balance', 'GL Net Balance']].max(axis=1)
             suspect_df = merged_df.sort_values(by='Max Absolute Balance', ascending=False).head(10)
             
-            # Display Results
-            st.success("Reconciliation Complete!")
-            
-            st.subheader("Summary")
-            col_s1, col_s2, col_s3, col_s4 = st.columns(4)
-            col_s1.metric("Total Accounts", len(merged_df))
-            col_s2.metric("Matched Accounts", len(matches_df))
-            col_s3.metric("Mismatches", len(mismatches_df))
-            col_s4.metric("Missing Accounts", len(missing_in_gl_df) + len(missing_in_tb_df))
-            
-            # Apply initial mapping
             if 'FS Line Item' not in merged_df.columns:
                 merged_df['FS Line Item'] = merged_df.apply(auto_map, axis=1)
-            
-            tab1, tab2, tab3, tab4, tab_map, tab_export = st.tabs([
-                "Discrepancies", "Missing Records", "Top 10 Suspects", "All Matches", "FS Mapping", "Export Reports"
-            ])
-            
-            # Common numeric formatting configuration
-            num_config = st.column_config.NumberColumn(format="%,.2f")
-            common_col_config = {
-                'GL Net Balance': st.column_config.NumberColumn("GL Net Balance (บัญชีแยกประเภท)", format="%,.2f"),
-                'TB Net Balance': st.column_config.NumberColumn("TB Net Balance (กระดาษทำการ)", format="%,.2f"),
-                'Difference': st.column_config.NumberColumn("Difference", format="%,.2f"),
-                'GL Brought Forward': st.column_config.NumberColumn("GL Brought Forward (บัญชีแยกประเภท)", format="%,.2f"),
-                'TB Brought Forward Net': st.column_config.NumberColumn("TB Brought Forward Net (งบทดลอง)", format="%,.2f"),
-                'BF Difference': st.column_config.NumberColumn("BF Difference", format="%,.2f"),
-                'Max Absolute Balance': st.column_config.NumberColumn("Max Absolute Balance", format="%,.2f"),
-            }
-            
-            tab4_col_config = {
-                'GL Net Balance': st.column_config.Column("GL Net Balance (บัญชีแยกประเภท)"),
-                'TB Net Balance': st.column_config.Column("TB Net Balance (กระดาษทำการ)"),
-                'GL Brought Forward': st.column_config.Column("GL Brought Forward (บัญชีแยกประเภท)"),
-                'TB Brought Forward Net': st.column_config.Column("TB Brought Forward Net (งบทดลอง)"),
-                'BF Difference': st.column_config.NumberColumn("BF Difference", format="%,.2f")
-            }
-            
-            with tab1:
-                st.write(f"Found {len(mismatches_df)} accounts with mismatched amounts.")
-                st.dataframe(mismatches_df[['Account ID', 'Account Name', 'GL Net Balance', 'TB Net Balance', 'Difference', 'GL Brought Forward', 'TB Brought Forward Net', 'BF Difference', 'Status']], use_container_width=True, column_config=common_col_config)
-                
-            with tab2:
-                st.write(f"Missing in GL: {len(missing_in_gl_df)}")
-                st.dataframe(missing_in_gl_df[['Account ID', 'Account Name', 'TB Net Balance', 'Status']], use_container_width=True, column_config=common_col_config)
-                st.write(f"Missing in TB: {len(missing_in_tb_df)}")
-                st.dataframe(missing_in_tb_df[['Account ID', 'Account Name', 'GL Net Balance', 'Status']], use_container_width=True, column_config=common_col_config)
-                
-            with tab3:
-                st.write("Top 10 largest accounts by absolute balance.")
-                st.dataframe(suspect_df[['Account ID', 'Account Name', 'Max Absolute Balance', 'Status']], use_container_width=True, column_config=common_col_config)
-                
-            with tab4:
-                st.write(f"Found {len(matches_df)} perfectly matched accounts.")
-                
-                display_matches_df = matches_df[['Account ID', 'Account Name', 'GL Net Balance', 'TB Net Balance', 'GL Brought Forward', 'TB Brought Forward Net', 'BF Difference', 'Status']].copy()
-                
-                # Format numeric columns to strings to preserve formatting when replacing with 'N/A'
-                for col in ['GL Net Balance', 'TB Net Balance', 'GL Brought Forward', 'TB Brought Forward Net']:
-                    display_matches_df[col] = display_matches_df[col].apply(lambda x: f"{x:,.2f}")
-                
-                # Replace with 'N/A' for missing accounts
-                missing_tb_mask = matches_df['Missing in TB original']
-                display_matches_df.loc[missing_tb_mask, 'TB Net Balance'] = 'N/A'
-                display_matches_df.loc[missing_tb_mask, 'TB Brought Forward Net'] = 'N/A'
-                
-                missing_gl_mask = matches_df['Missing in GL original']
-                display_matches_df.loc[missing_gl_mask, 'GL Net Balance'] = 'N/A'
-                display_matches_df.loc[missing_gl_mask, 'GL Brought Forward'] = 'N/A'
-                
-                st.dataframe(display_matches_df, use_container_width=True, column_config=tab4_col_config)
-                
-            with tab_map:
-                st.write("Review the auto-mapped Financial Statement Line Items. You can edit them directly in the table below.")
-                st.info("The tool auto-guessed the line item based on Account ID and Name. Adjust any 'Unmapped' or incorrect items before exporting.")
-                
-                # Show editor
-                mapping_df = merged_df[['Account ID', 'Account Name', 'TB Net Balance', 'FS Line Item']].copy()
-                edited_mapping = st.data_editor(
-                    mapping_df,
-                    column_config={
-                        "FS Line Item": st.column_config.SelectboxColumn(
-                            "FS Line Item",
-                            help="Select the FS Line Item for this account",
-                            width="medium",
-                            options=list(FS_LINE_ITEMS.keys()) + ["ไม่จัดประเภท (Unmapped)"],
-                            required=True,
-                        ),
-                        "TB Net Balance": num_config
-                    },
-                    disabled=["Account ID", "Account Name", "TB Net Balance"],
-                    use_container_width=True,
-                    key="mapping_editor"
-                )
-                
-                # Update merged_df with the edited mapping
-                merged_df['FS Line Item'] = edited_mapping['FS Line Item']
-                
-                # Show live preview of the generated FS with inline breakdown
-                st.subheader("Financial Statement Preview")
-                st.write("Click on any line item to see the accounts that make up its total.")
-                fs_preview = merged_df.groupby('FS Line Item')['TB Net Balance'].sum().reset_index()
-                
-                for _, row in fs_preview.iterrows():
-                    fs_line = row['FS Line Item']
-                    total = row['TB Net Balance']
-                    if pd.notna(fs_line) and fs_line != "ไม่จัดประเภท (Unmapped)":
-                        with st.expander(f"**{fs_line}** — Total: **{total:,.2f}**"):
-                            line_items_df = merged_df[merged_df['FS Line Item'] == fs_line][['Account ID', 'Account Name', 'TB Net Balance']].reset_index(drop=True)
-                            st.dataframe(line_items_df, use_container_width=True, column_config={'TB Net Balance': num_config})
-                
-                # Show unmapped items if any
-                unmapped = merged_df[merged_df['FS Line Item'] == "ไม่จัดประเภท (Unmapped)"]
-                if not unmapped.empty:
-                    unmapped_total = unmapped['TB Net Balance'].sum()
-                    with st.expander(f"⚠️ **ไม่จัดประเภท (Unmapped)** — Total: **{unmapped_total:,.2f}**"):
-                        st.dataframe(unmapped[['Account ID', 'Account Name', 'TB Net Balance']].reset_index(drop=True), use_container_width=True, column_config={'TB Net Balance': num_config})
+            st.session_state['recon_merged_df'] = merged_df
+            st.session_state['recon_mismatches_df'] = mismatches_df
+            st.session_state['recon_missing_gl_df'] = missing_in_gl_df
+            st.session_state['recon_missing_tb_df'] = missing_in_tb_df
+            st.session_state['recon_matches_df'] = matches_df
+            st.session_state['recon_suspect_df'] = suspect_df
+            st.session_state['data_parsed'] = True
+
+    if st.session_state.get('data_parsed', False):
+        merged_df = st.session_state['recon_merged_df']
+        mismatches_df = st.session_state['recon_mismatches_df']
+        missing_in_gl_df = st.session_state['recon_missing_gl_df']
+        missing_in_tb_df = st.session_state['recon_missing_tb_df']
+        matches_df = st.session_state['recon_matches_df']
+        suspect_df = st.session_state['recon_suspect_df']
+
+        # Display Results
+        st.success("Reconciliation Complete!")
+
+        st.subheader("Summary")
+        col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+        col_s1.metric("Total Accounts", len(merged_df))
+        col_s2.metric("Matched Accounts", len(matches_df))
+        col_s3.metric("Mismatches", len(mismatches_df))
+        col_s4.metric("Missing Accounts", len(missing_in_gl_df) + len(missing_in_tb_df))
+
+        # Apply initial mapping
 
 
-            with tab_export:
-                st.write("Download your reconciled data or generate the finalized Financial Statements.")
-                
-                col_e1, col_e2 = st.columns(2)
-                with col_e1:
-                    # Original Reconciliation Export
-                    buffer_recon = io.BytesIO()
-                    with pd.ExcelWriter(buffer_recon, engine='xlsxwriter') as writer:
-                        rename_dict = {
-                            'TB Net Balance': 'TB Net Balance (กระดาษทำการ)',
-                            'GL Net Balance': 'GL Net Balance (บัญชีแยกประเภท)',
-                            'TB Brought Forward Net': 'TB Brought Forward Net (งบทดลอง)',
-                            'GL Brought Forward': 'GL Brought Forward (บัญชีแยกประเภท)',
-                            'TB Debit': 'TB Debit (กระดาษทำการ)',
-                            'TB Credit': 'TB Credit (กระดาษทำการ)',
-                            'GL Debit': 'GL Debit (บัญชีแยกประเภท)',
-                            'GL Credit': 'GL Credit (บัญชีแยกประเภท)'
-                        }
-                        
-                        export_df = merged_df.drop(columns=['Missing in TB original', 'Missing in GL original']).rename(columns=rename_dict)
-                        export_df.to_excel(writer, sheet_name='All Accounts', index=False)
-                        mismatches_df.rename(columns=rename_dict).to_excel(writer, sheet_name='Discrepancies', index=False)
-                        missing_in_tb_df.rename(columns=rename_dict).to_excel(writer, sheet_name='Missing in TB', index=False)
-                        missing_in_gl_df.rename(columns=rename_dict).to_excel(writer, sheet_name='Missing in GL', index=False)
-                        suspect_df.drop(columns=['Missing in TB original', 'Missing in GL original']).rename(columns=rename_dict).to_excel(writer, sheet_name='Top 10 Suspects', index=False)
-                    
-                    st.download_button(
-                        label="Download Reconciliation Data",
-                        data=buffer_recon.getvalue(),
-                        file_name="Reconciliation_Report.xlsx",
-                        mime="application/vnd.ms-excel"
-                    )
-                
-                with col_e2:
-                    st.write("Export directly to the FS.xlsx template based on your mapping.")
-                    template_path = "../FS.xlsx"
-                    if os.path.exists(template_path):
-                        # Group by mapping to get final sums
-                        fs_summary_dict = merged_df.groupby('FS Line Item')['TB Net Balance'].sum().to_dict()
-                        
-                        try:
-                            wb = openpyxl.load_workbook(template_path)
-                            for fs_line, val in fs_summary_dict.items():
-                                if fs_line in FS_CELLS:
-                                    sheet_name = FS_CELLS[fs_line]["sheet"]
-                                    cell_ref = FS_CELLS[fs_line]["cell"]
-                                    wb[sheet_name][cell_ref].value = val
-                            
-                            buffer_fs = io.BytesIO()
-                            wb.save(buffer_fs)
-                            buffer_fs.seek(0)
-                            
-                            st.download_button(
-                                label="Download Financial Statements (FS.xlsx)",
-                                data=buffer_fs.getvalue(),
-                                file_name="Generated_FS.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                type="primary"
-                            )
-                        except Exception as e:
-                            st.error(f"Error generating FS: {e}")
+        tab1, tab2, tab3, tab4, tab_map, tab_export = st.tabs([
+            "Discrepancies", "Missing Records", "Top 10 Suspects", "All Matches", "FS Mapping", "Export Reports"
+        ])
+
+        # Common numeric formatting configuration
+        num_config = st.column_config.NumberColumn(format="%,.2f")
+        common_col_config = {
+            'GL Net Balance': st.column_config.NumberColumn("GL Net Balance (บัญชีแยกประเภท)", format="%,.2f"),
+            'TB Net Balance': st.column_config.NumberColumn("TB Net Balance (กระดาษทำการ)", format="%,.2f"),
+            'Difference': st.column_config.NumberColumn("Difference", format="%,.2f"),
+            'GL Brought Forward': st.column_config.NumberColumn("GL Brought Forward (บัญชีแยกประเภท)", format="%,.2f"),
+            'TB Brought Forward Net': st.column_config.NumberColumn("TB Brought Forward Net (งบทดลอง)", format="%,.2f"),
+            'BF Difference': st.column_config.NumberColumn("BF Difference", format="%,.2f"),
+            'Max Absolute Balance': st.column_config.NumberColumn("Max Absolute Balance", format="%,.2f"),
+        }
+
+        tab4_col_config = {
+            'GL Net Balance': st.column_config.Column("GL Net Balance (บัญชีแยกประเภท)"),
+            'TB Net Balance': st.column_config.Column("TB Net Balance (กระดาษทำการ)"),
+            'GL Brought Forward': st.column_config.Column("GL Brought Forward (บัญชีแยกประเภท)"),
+            'TB Brought Forward Net': st.column_config.Column("TB Brought Forward Net (งบทดลอง)"),
+            'BF Difference': st.column_config.NumberColumn("BF Difference", format="%,.2f")
+        }
+
+        with tab1:
+            st.write(f"Found {len(mismatches_df)} accounts with mismatched amounts.")
+            st.dataframe(mismatches_df[['Account ID', 'Account Name', 'GL Net Balance', 'TB Net Balance', 'Difference', 'GL Brought Forward', 'TB Brought Forward Net', 'BF Difference', 'Status']], use_container_width=True, column_config=common_col_config)
+
+        with tab2:
+            st.write(f"Missing in GL: {len(missing_in_gl_df)}")
+            st.dataframe(missing_in_gl_df[['Account ID', 'Account Name', 'TB Net Balance', 'Status']], use_container_width=True, column_config=common_col_config)
+            st.write(f"Missing in TB: {len(missing_in_tb_df)}")
+            st.dataframe(missing_in_tb_df[['Account ID', 'Account Name', 'GL Net Balance', 'Status']], use_container_width=True, column_config=common_col_config)
+
+        with tab3:
+            st.write("Top 10 largest accounts by absolute balance.")
+            st.dataframe(suspect_df[['Account ID', 'Account Name', 'Max Absolute Balance', 'Status']], use_container_width=True, column_config=common_col_config)
+
+        with tab4:
+            st.write(f"Found {len(matches_df)} perfectly matched accounts.")
+
+            display_matches_df = matches_df[['Account ID', 'Account Name', 'GL Net Balance', 'TB Net Balance', 'GL Brought Forward', 'TB Brought Forward Net', 'BF Difference', 'Status']].copy()
+
+            # Format numeric columns to strings to preserve formatting when replacing with 'N/A'
+            for col in ['GL Net Balance', 'TB Net Balance', 'GL Brought Forward', 'TB Brought Forward Net']:
+                display_matches_df[col] = display_matches_df[col].apply(lambda x: f"{x:,.2f}")
+
+            # Replace with 'N/A' for missing accounts
+            missing_tb_mask = matches_df['Missing in TB original']
+            display_matches_df.loc[missing_tb_mask, 'TB Net Balance'] = 'N/A'
+            display_matches_df.loc[missing_tb_mask, 'TB Brought Forward Net'] = 'N/A'
+
+            missing_gl_mask = matches_df['Missing in GL original']
+            display_matches_df.loc[missing_gl_mask, 'GL Net Balance'] = 'N/A'
+            display_matches_df.loc[missing_gl_mask, 'GL Brought Forward'] = 'N/A'
+
+            st.dataframe(display_matches_df, use_container_width=True, column_config=tab4_col_config)
+
+        with tab_map:
+            st.write("Review the auto-mapped Financial Statement Line Items. You can edit them directly in the table below.")
+            st.info("The tool auto-guessed the line item based on Account ID and Name. Adjust any 'Unmapped' or incorrect items before exporting.")
+
+            # Show editor
+            mapping_df = merged_df[['Account ID', 'Account Name', 'TB Net Balance', 'FS Line Item']].copy()
+            edited_mapping = st.data_editor(
+                mapping_df,
+                column_config={
+                    "FS Line Item": st.column_config.SelectboxColumn(
+                        "FS Line Item",
+                        help="Select the FS Line Item for this account",
+                        width="medium",
+                        options=list(FS_LINE_ITEMS.keys()) + ["ไม่จัดประเภท (Unmapped)"],
+                        required=True,
+                    ),
+                    "TB Net Balance": num_config
+                },
+                disabled=["Account ID", "Account Name", "TB Net Balance"],
+                use_container_width=True,
+                key="mapping_editor"
+            )
+
+            # Update merged_df with the edited mapping
+            merged_df['FS Line Item'] = edited_mapping['FS Line Item']
+
+            # Show live preview of the generated FS with inline breakdown
+            st.subheader("Financial Statement Preview")
+            st.write("Click on any line item to see the accounts that make up its total.")
+            fs_preview = merged_df.groupby('FS Line Item')['TB Net Balance'].sum().reset_index()
+
+            for _, row in fs_preview.iterrows():
+                fs_line = row['FS Line Item']
+                total = row['TB Net Balance']
+                if pd.notna(fs_line) and fs_line != "ไม่จัดประเภท (Unmapped)":
+                    with st.expander(f"**{fs_line}** — Total: **{total:,.2f}**"):
+                        line_items_df = merged_df[merged_df['FS Line Item'] == fs_line][['Account ID', 'Account Name', 'TB Net Balance']].reset_index(drop=True)
+                        st.dataframe(line_items_df, use_container_width=True, column_config={'TB Net Balance': num_config})
+
+            # Show unmapped items if any
+            unmapped = merged_df[merged_df['FS Line Item'] == "ไม่จัดประเภท (Unmapped)"]
+            if not unmapped.empty:
+                unmapped_total = unmapped['TB Net Balance'].sum()
+                with st.expander(f"⚠️ **ไม่จัดประเภท (Unmapped)** — Total: **{unmapped_total:,.2f}**"):
+                    st.dataframe(unmapped[['Account ID', 'Account Name', 'TB Net Balance']].reset_index(drop=True), use_container_width=True, column_config={'TB Net Balance': num_config})
+
+
+        with tab_export:
+            st.write("Download your reconciled data or generate the finalized Financial Statements.")
+
+            # Current year FS data from the mapping
+            fs_summary_current = edited_mapping.groupby('FS Line Item')['TB Net Balance'].sum().to_dict()
+            fs_summary_current.pop('ไม่จัดประเภท (Unmapped)', None)
+
+            # Prepare years_data dict
+            years_data = {current_year_label: fs_summary_current}
+            prior_year_arg = None
+            prior_summary = {}
+
+            # Parse prior year TB if uploaded
+            if prior_tb_file:
+                try:
+                    prior_tb_file.seek(0)
+                    if prior_tb_file.name.lower().endswith('.pdf'):
+                        prior_tb_df = parse_tb_working_paper_pdf(prior_tb_file)
                     else:
-                        st.error("Template 'FS.xlsx' not found in the application directory.")
+                        prior_tb_df = parse_tb(prior_tb_file)
+                    if not prior_tb_df.empty:
+                        prior_tb_df['FS Line Item'] = prior_tb_df.apply(auto_map, axis=1)
+                        prior_summary = prior_tb_df.groupby('FS Line Item')['TB Net Balance'].sum().to_dict()
+                        prior_summary.pop('ไม่จัดประเภท (Unmapped)', None)
+                        years_data[prior_year_label] = prior_summary
+                        prior_year_arg = prior_year_label
+                        st.success(f"✅ Prior year ({prior_year_label}) loaded: {len(prior_tb_df)} accounts")
+                except Exception as e:
+                    st.warning(f"Could not parse prior year TB: {e}")
 
+            col_e1, col_e2, col_e3 = st.columns(3)
+            with col_e1:
+                st.markdown("##### 📋 Reconciliation Report")
+                # Original Reconciliation Export
+                buffer_recon = io.BytesIO()
+                with pd.ExcelWriter(buffer_recon, engine='xlsxwriter') as writer:
+                    rename_dict = {
+                        'TB Net Balance': 'TB Net Balance (กระดาษทำการ)',
+                        'GL Net Balance': 'GL Net Balance (บัญชีแยกประเภท)',
+                        'TB Brought Forward Net': 'TB Brought Forward Net (งบทดลอง)',
+                        'GL Brought Forward': 'GL Brought Forward (บัญชีแยกประเภท)',
+                        'TB Debit': 'TB Debit (กระดาษทำการ)',
+                        'TB Credit': 'TB Credit (กระดาษทำการ)',
+                        'GL Debit': 'GL Debit (บัญชีแยกประเภท)',
+                        'GL Credit': 'GL Credit (บัญชีแยกประเภท)'
+                    }
 
-if __name__ == "__main__":
-    main()
+                    export_df = merged_df.drop(columns=['Missing in TB original', 'Missing in GL original']).rename(columns=rename_dict)
+                    export_df.to_excel(writer, sheet_name='All Accounts', index=False)
+                    mismatches_df.rename(columns=rename_dict).to_excel(writer, sheet_name='Discrepancies', index=False)
+                    missing_in_tb_df.rename(columns=rename_dict).to_excel(writer, sheet_name='Missing in TB', index=False)
+                    missing_in_gl_df.rename(columns=rename_dict).to_excel(writer, sheet_name='Missing in GL', index=False)
+                    suspect_df.drop(columns=['Missing in TB original', 'Missing in GL original']).rename(columns=rename_dict).to_excel(writer, sheet_name='Top 10 Suspects', index=False)
+
+                st.download_button(
+                    label="Download Reconciliation Data",
+                    data=buffer_recon.getvalue(),
+                    file_name="Reconciliation_Report.xlsx",
+                    mime="application/vnd.ms-excel"
+                )
+
+            with col_e2:
+                st.markdown("##### 📊 Financial Statements (New)")
+                st.caption("สร้างงบการเงินจากข้อมูล FS Mapping — รองรับงบเปรียบเทียบหลายปี")
+
+                if not company_name:
+                    st.warning("กรุณากรอกชื่อบริษัทด้านบน (Company Info) ก่อนสร้างงบ")
+                else:
+                    try:
+                        fs_bytes = generate_fs_excel(
+                            years_data=years_data,
+                            company_name=company_name,
+                            current_year=current_year_label,
+                            prior_year=prior_year_arg,
+                            registered_capital=fs_shares * fs_par,
+                            shares=fs_shares,
+                            par_value=fs_par,
+                        )
+                        safe_name = re.sub(r'[^\w\u0e00-\u0e7f]', '_', company_name)[:30]
+                        st.download_button(
+                            label="📊 Download Financial Statements",
+                            data=fs_bytes,
+                            file_name=f"FS_{safe_name}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            type="primary"
+                        )
+                    except Exception as e:
+                        st.error(f"Error generating FS: {e}")
+
+            with col_e3:
+                st.markdown("##### 📄 Legacy FS Template")
+                st.caption("Upload your own template. The system will search for FS Line Items and fill in the adjacent columns.")
+                legacy_template_file = st.file_uploader("Upload FS Template (Excel)", type=["xls", "xlsx"], key="legacy_fs_template")
+
+                if legacy_template_file:
+                    try:
+                        wb = openpyxl.load_workbook(legacy_template_file)
+                        fs_names = list(FS_LINE_ITEMS.keys())
+                        # Iterate all sheets to replace placeholders and find row labels
+                        for sheet_name in wb.sheetnames:
+                            sheet = wb[sheet_name]
+                            for row in sheet.iter_rows():
+                                for cell in row:
+                                    # Replace placeholder tags
+                                    if isinstance(cell.value, str):
+                                        if "{{Company_Name}}" in cell.value:
+                                            cell.value = cell.value.replace("{{Company_Name}}", company_name)
+                                        if "{{Current_Year}}" in cell.value:
+                                            cell.value = cell.value.replace("{{Current_Year}}", current_year_label)
+                                        if prior_year_label and "{{Prior_Year}}" in cell.value:
+                                            cell.value = cell.value.replace("{{Prior_Year}}", prior_year_label)
+
+                                    # Search for FS Line Items (scan first 5 columns)
+                                    if cell.column <= 5 and isinstance(cell.value, str):
+                                        val_str = str(cell.value).strip()
+                                        if val_str in fs_names:
+                                            # Found a match! Current year goes to column+1, Prior year to column+2
+                                            cy_amount = fs_summary_current.get(val_str, 0)
+                                            py_amount = prior_summary.get(val_str, 0)
+                                            
+                                            # Only write if there is an amount or if it's safe to zero it out
+                                            if cy_amount != 0 or py_amount != 0:
+                                                cy_cell = sheet.cell(row=cell.row, column=cell.column+1)
+                                                py_cell = sheet.cell(row=cell.row, column=cell.column+2)
+                                                
+                                                # Set values
+                                                cy_cell.value = cy_amount
+                                                if prior_tb_file:
+                                                    py_cell.value = py_amount
+
+                        buffer_fs = io.BytesIO()
+                        wb.save(buffer_fs)
+                        buffer_fs.seek(0)
+                        st.download_button(
+                            label="Download Populated Template",
+                            data=buffer_fs.getvalue(),
+                            file_name=f"Generated_{legacy_template_file.name}",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="download_legacy_fs"
+                        )
+                    except Exception as e:
+                        st.error(f"Error generating FS: {e}")
+                else:
+                    st.info("Please upload an FS template to use this feature.")
+main()
