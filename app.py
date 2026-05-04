@@ -14,18 +14,18 @@ FS_LINE_ITEMS = {
     "เงินสดและรายการเทียบเท่าเงินสด": {"prefixes": ["111"], "keywords": ["เงินสด", "เงินฝาก"], "side": "bs_debit"},
     "ลูกหนี้การค้า": {"prefixes": ["113"], "keywords": ["ลูกหนี้"], "side": "bs_debit"},
     "เงินให้กู้ยืมแก่บุคคลที่เกี่ยวข้องกัน": {"prefixes": ["121"], "keywords": ["เงินให้กู้ยืม"], "side": "bs_debit"},
-    "สินทรัพย์หมุนเวียนอื่น ": {"prefixes": ["115", "119", "150"], "keywords": ["ภาษีถูกหัก", "จ่ายล่วงหน้า", "ดอกเบี้ยค้างรับ"], "side": "bs_debit"},
+    "สินทรัพย์หมุนเวียนอื่น": {"prefixes": ["115", "119", "150"], "keywords": ["ภาษีถูกหัก", "จ่ายล่วงหน้า", "ดอกเบี้ยค้างรับ"], "side": "bs_debit"},
     "อุปกรณ์-สุทธิ (Gross)": {"prefixes": ["141"], "keywords": ["เครื่องมือ", "เครื่องจักร", "อุปกรณ์สำนักงาน"], "side": "bs_debit"},
     "ค่าเสื่อมราคาสะสม": {"prefixes": ["142"], "keywords": ["ค่าเสื่อมราคาสะสม"], "side": "bs_credit"},
     
-    # Balance Sheet — Liabilities (use BS Credit column = งบดุล เครดิต)
+    # Balance Sheet — Liabilities
     "เจ้าหนี้การค้า": {"prefixes": ["212"], "keywords": ["เจ้าหนี้การค้า"], "side": "bs_credit"},
-    "เจ้าหนี้อื่น": {"prefixes": ["211", "2131"], "keywords": ["เจ้าหนี้", "ค้างจ่าย", "กรมสรรพากร", "ประกันสังคม", "สอบบัญชี", "ทำบัญชี"], "side": "bs_credit"},
-    "หนี้สินหมุนเวียนอื่น ": {"prefixes": ["2132", "2137"], "keywords": ["ภาษีหัก", "ภงด"], "side": "bs_credit"},
+    "เจ้าหนี้หมุนเวียนอื่น": {"prefixes": ["211", "2131"], "keywords": ["เจ้าหนี้", "ค้างจ่าย", "สอบบัญชี", "ทำบัญชี"], "side": "bs_credit"},
+    "หนี้สินหมุนเวียนอื่น": {"prefixes": ["2132", "2137", "2131-04"], "keywords": ["ภาษีหัก", "ภงด", "กรมสรรพากร", "ประกันสังคม", "รอนำส่ง"], "side": "bs_credit"},
     "เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน": {"prefixes": ["2138"], "keywords": ["เงินกู้ยืม"], "side": "bs_credit"},
     
     # Balance Sheet — Equity (use BS Credit column = งบดุล เครดิต)
-    "ทุนเรือนหุ้น ": {"prefixes": ["31"], "keywords": ["ทุน"], "side": "bs_credit"},
+    "ทุนเรือนหุ้น": {"prefixes": ["31"], "keywords": ["ทุน"], "side": "bs_credit"},
     "กำไร(ขาดทุน)สะสม": {"prefixes": ["32"], "keywords": ["กำไร"], "side": "bs_debit"},
     
     # P&L — Revenue (use PL Credit column = งบกำไรขาดทุน เครดิต)
@@ -50,8 +50,8 @@ FS_BS_STRUCTURE = [
     ('item',   'เงินสดและรายการเทียบเท่าเงินสด', 4, 'เงินสดและรายการเทียบเท่าเงินสด'),
     ('item',   'ลูกหนี้การค้า', 5, 'ลูกหนี้การค้า'),
     ('item',   'เงินให้กู้ยืมแก่บุคคลที่เกี่ยวข้องกัน', None, 'เงินให้กู้ยืมแก่บุคคลที่เกี่ยวข้องกัน'),
-    ('item',   'สินทรัพย์หมุนเวียนอื่น', 6, 'สินทรัพย์หมุนเวียนอื่น '),
-    ('subtotal','รวมสินทรัพย์หมุนเวียน', None, ['เงินสดและรายการเทียบเท่าเงินสด', 'ลูกหนี้การค้า', 'เงินให้กู้ยืมแก่บุคคลที่เกี่ยวข้องกัน', 'สินทรัพย์หมุนเวียนอื่น ']),
+    ('item',   'สินทรัพย์หมุนเวียนอื่น', 6, 'สินทรัพย์หมุนเวียนอื่น'),
+    ('subtotal','รวมสินทรัพย์หมุนเวียน', None, ['เงินสดและรายการเทียบเท่าเงินสด', 'ลูกหนี้การค้า', 'เงินให้กู้ยืมแก่บุคคลที่เกี่ยวข้องกัน', 'สินทรัพย์หมุนเวียนอื่น']),
     ('spacer',  None, None, None),
     ('header', 'สินทรัพย์ไม่หมุนเวียน', None, None),
     ('item',   'อุปกรณ์-สุทธิ (Gross)', None, 'อุปกรณ์-สุทธิ (Gross)'),
@@ -63,16 +63,16 @@ FS_BS_STRUCTURE = [
     ('header', 'หนี้สินและส่วนของเจ้าของ', None, None),
     ('header', 'หนี้สินหมุนเวียน', None, None),
     ('item',   'เจ้าหนี้การค้า', None, 'เจ้าหนี้การค้า'),
-    ('item',   'เจ้าหนี้หมุนเวียนอื่น', 8, 'เจ้าหนี้อื่น'),
+    ('item',   'เจ้าหนี้หมุนเวียนอื่น', 8, 'เจ้าหนี้หมุนเวียนอื่น'), # <-- Unified! Name and Key match perfectly.
     ('item',   'เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน', 9, 'เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน'),
-    ('item',   'หนี้สินหมุนเวียนอื่น', 10, 'หนี้สินหมุนเวียนอื่น '),
-    ('subtotal','รวมหนี้สินหมุนเวียน', None, ['เจ้าหนี้การค้า', 'เจ้าหนี้อื่น', 'เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน', 'หนี้สินหมุนเวียนอื่น ']),
+    ('item',   'หนี้สินหมุนเวียนอื่น', 10, 'หนี้สินหมุนเวียนอื่น'),
+    ('subtotal','รวมหนี้สินหมุนเวียน', None, ['เจ้าหนี้การค้า', 'เจ้าหนี้หมุนเวียนอื่น', 'เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน', 'หนี้สินหมุนเวียนอื่น']),
     ('subtotal','รวมหนี้สิน', None, ['รวมหนี้สินหมุนเวียน']),
     ('spacer',  None, None, None),
     ('header', 'ส่วนของเจ้าของ', None, None),
-    ('item',   'ทุนเรือนหุ้น', None, 'ทุนเรือนหุ้น '),
+    ('item',   'ทุนเรือนหุ้น', None, 'ทุนเรือนหุ้น'),
     ('item',   'กำไร(ขาดทุน)สะสม', None, 'กำไร(ขาดทุน)สะสม'),
-    ('subtotal','รวมส่วนของเจ้าของ', None, ['ทุนเรือนหุ้น ', 'กำไร(ขาดทุน)สะสม']),
+    ('subtotal','รวมส่วนของเจ้าของ', None, ['ทุนเรือนหุ้น', 'กำไร(ขาดทุน)สะสม']),
     ('subtotal','รวมหนี้สินและส่วนของเจ้าของ', None, ['รวมหนี้สิน', 'รวมส่วนของเจ้าของ']),
 ]
 
@@ -717,17 +717,35 @@ def main():
     default_prior_year = st.session_state.get('_gl_extracted_prior_year', 'พ.ศ. 2567')
     
     # Company info for FS generation
-    with st.expander("ข้อมูลบริษัท / Company Info (สำหรับสร้างงบการเงิน)", expanded=False):
-        col_ci1, col_ci2, col_ci3, col_ci4 = st.columns([3, 1, 1, 1])
+    with st.expander("ข้อมูลบริษัท / Company Info (สำหรับสร้างงบการเงิน)", expanded=True):
+        col_ci1, col_ci2 = st.columns([3, 1])
         with col_ci1:
             company_name = st.text_input("ชื่อบริษัท", value=default_company, placeholder="บริษัท xxxxxxx จำกัด", key='company_name')
         with col_ci2:
             current_year_label = st.text_input("ปีปัจจุบัน", value=default_year, key='current_year_label')
-        with col_ci3:
-            fs_shares = st.number_input("จำนวนหุ้น", min_value=0, value=0, step=1000, key='fs_shares')
-        with col_ci4:
-            fs_par = st.number_input("มูลค่าหุ้นละ (บาท)", min_value=0.0, value=0.0, step=1.0, key='fs_par')
-    
+        
+        st.write("---")
+        st.write("##### 📊 ข้อมูลทุนเรือนหุ้น (Share Capital)")
+        st.caption("ข้อมูลนี้จะถูกนำไปจัดหน้าในส่วนของ 'ส่วนของเจ้าของ' ในงบฐานะการเงิน")
+        
+        col_cap1, col_cap2 = st.columns(2)
+        with col_cap1:
+            st.markdown("**1. ทุนจดทะเบียน (Authorized Capital)**")
+            reg_shares = st.number_input("จำนวนหุ้นจดทะเบียน (หุ้น)", min_value=0, value=10000, step=1000, key='reg_shares')
+            reg_par = st.number_input("มูลค่าจดทะเบียนหุ้นละ (บาท)", min_value=0.0, value=100.0, step=1.0, key='reg_par')
+            st.info(f"💡 ทุนจดทะเบียนรวม: **{reg_shares * reg_par:,.2f}** บาท\n\n*(แสดงเป็นข้อมูลในงบดุล แต่ไม่นำไปบวกรวมในยอดหนี้สินและส่วนของเจ้าของ)*")
+            
+        with col_cap2:
+            st.markdown("**2. ทุนที่ออกและเรียกชำระแล้ว (Paid-up Capital)**")
+            paid_shares = st.number_input("จำนวนหุ้นที่เรียกชำระ (หุ้น)", min_value=0, value=10000, step=1000, key='paid_shares')
+            paid_par = st.number_input("มูลค่าที่เรียกชำระแล้วหุ้นละ (บาท)", min_value=0.0, value=25.0, step=1.0, key='paid_par')
+            st.success(f"💡 ทุนที่เรียกชำระแล้วรวม: **{paid_shares * paid_par:,.2f}** บาท\n\n*(ยอดนี้คือตัวเลขจริงที่จะถูกนำไปคำนวณเพื่อให้งบดุลลงตัว)*")
+        
+        st.write("---")
+        st.selectbox("วิธีการคำนวณภาษีเงินได้นิติบุคคล (Corporate Tax Rule)", 
+                     ["Auto-Detect จากงบทดลอง (แนะนำ)", "SME (ยกเว้น 300k แรก, 15%-20%)", "Standard (20%)", "ไม่คำนวณอัตโนมัติ (Manual)"], 
+                     key='tax_method')
+                     
     col1, col2, col3 = st.columns(3)
     with col1:
         tb_file = st.file_uploader("Upload Trial Balance / กระดาษทำการ (Excel or PDF)", type=["xls", "xlsx", "pdf"])
@@ -964,80 +982,245 @@ def main():
             st.dataframe(display_matches_df, use_container_width=True, column_config=tab4_col_config)
 
         with tab_map:
-            st.write("Review the auto-mapped Financial Statement Line Items. You can edit them directly in the table below.")
-            st.info("💡 **FS Value** คือตัวเลขที่จะถูกนำไปใช้สร้างงบการเงิน (จากงบดุล/งบกำไรขาดทุน ตามประเภทบัญชี) — สามารถแก้ไขได้ทั้ง FS Line Item และ FS Value")
+            st.write("### 🗂️ Master FS Mapping & Verification")
+            st.write("Review your mapping and see exactly where the data comes from before generating **FS.xlsx**.")
 
-            # Compute the FS Value column: the correct amount that will be used in FS generation
+            # ==========================================
+            # 1. FIX STRUCTURE BUGS & ADD TAX LINE ITEM
+            # ==========================================
+            # Fix space mismatch in subtotal that was causing "รวมสินทรัพย์หมุนเวียน" to not sum correctly
+            for idx, row in enumerate(FS_BS_STRUCTURE):
+                if row[0] == 'subtotal' and row[1] == 'รวมสินทรัพย์หมุนเวียน':
+                    FS_BS_STRUCTURE[idx] = ('subtotal', 'รวมสินทรัพย์หมุนเวียน', None, 
+                        ['เงินสดและรายการเทียบเท่าเงินสด', 'ลูกหนี้การค้า', 'เงินให้กู้ยืมแก่บุคคลที่เกี่ยวข้องกัน', 'สินทรัพย์หมุนเวียนอื่น'])
+            
+            # Add P&L line item dynamically for the Income Tax
+            if "ภาษีเงินได้" not in FS_LINE_ITEMS:
+                FS_LINE_ITEMS["ภาษีเงินได้"] = {"prefixes": [], "keywords": ["ภาษีเงินได้นิติบุคคล"], "side": "pl_debit"}
+                for i, row in enumerate(FS_PL_STRUCTURE):
+                    if row[0] == 'subtotal' and row[1] == 'รวมค่าใช้จ่าย':
+                        if 'ภาษีเงินได้' not in row[3]:
+                            row[3].append('ภาษีเงินได้')
+                        if ('item', 'ภาษีเงินได้', None, 'ภาษีเงินได้') not in FS_PL_STRUCTURE:
+                            FS_PL_STRUCTURE.insert(i, ('item', 'ภาษีเงินได้', None, 'ภาษีเงินได้'))
+                        break
+
+            # ==========================================
+            # 2. AUTO-DETECT & DYNAMIC CORPORATE TAX CALCULATION
+            # ==========================================
+            rev_total = merged_df[merged_df['Account ID'].str.startswith('4', na=False)]['PL Credit'].sum() - merged_df[merged_df['Account ID'].str.startswith('4', na=False)]['PL Debit'].sum()
+            exp_total = merged_df[merged_df['Account ID'].str.startswith('5', na=False)]['PL Debit'].sum() - merged_df[merged_df['Account ID'].str.startswith('5', na=False)]['PL Credit'].sum()
+
+            if rev_total == 0 and exp_total == 0:
+                rev_total = merged_df[merged_df['Account ID'].str.startswith('4', na=False)]['TB Net Balance'].sum()
+                exp_total = merged_df[merged_df['Account ID'].str.startswith('5', na=False)]['TB Net Balance'].sum()
+
+            pre_tax_profit = rev_total - exp_total
+            corporate_tax = 0.0
+            
+            tax_method = st.session_state.get('tax_method', "Auto-Detect จากงบทดลอง (แนะนำ)")
+            applied_tax_rule = tax_method 
+
+            if tax_method == "Auto-Detect จากงบทดลอง (แนะนำ)":
+                has_tax_expense = merged_df['Account Name'].str.contains('ภาษีเงินได้นิติบุคคล|ค่าใช้จ่ายภาษีเงินได้', na=False).any()
+                total_revenue = merged_df[merged_df['Account ID'].str.startswith('4', na=False)]['TB Net Balance'].sum()
+                capital_df = merged_df[(merged_df['Account ID'].str.startswith('3', na=False)) & (merged_df['Account Name'].str.contains('ทุน', na=False))]
+                total_capital = capital_df['TB Net Balance'].sum() if not capital_df.empty else 0.0
+
+                if has_tax_expense:
+                    applied_tax_rule = "ไม่คำนวณอัตโนมัติ (Manual)"
+                    st.info("💡 **Auto-Detect:** พบรหัสบัญชี 'ภาษีเงินได้นิติบุคคล' ในงบทดลอง ระบบจะไม่คำนวณภาษีซ้ำ")
+                elif total_capital <= 5000000 and total_revenue <= 30000000:
+                    applied_tax_rule = "SME (ยกเว้น 300k แรก, 15%-20%)"
+                    st.info(f"💡 **Auto-Detect:** ใช้งานอัตราภาษี **SME** (ทุน {total_capital:,.0f} | รายได้ {total_revenue:,.0f})")
+                else:
+                    applied_tax_rule = "Standard (20%)"
+                    st.info(f"💡 **Auto-Detect:** ใช้งานอัตราภาษี **Standard 20%**")
+
+            if pre_tax_profit > 0 and applied_tax_rule != "ไม่คำนวณอัตโนมัติ (Manual)":
+                if applied_tax_rule == "Standard (20%)":
+                    corporate_tax = round(pre_tax_profit * 0.20, 2)
+                elif applied_tax_rule == "SME (ยกเว้น 300k แรก, 15%-20%)":
+                    if pre_tax_profit <= 300000:
+                        corporate_tax = 0.0
+                    elif pre_tax_profit <= 3000000:
+                        corporate_tax = round((pre_tax_profit - 300000) * 0.15, 2)
+                    else:
+                        corporate_tax = 405000.0 + round((pre_tax_profit - 3000000) * 0.20, 2)
+
+            if corporate_tax > 0 and not (merged_df['Account ID'] == 'TAX-PL').any():
+                tax_label = "SME" if "SME" in applied_tax_rule else "Standard"
+                tax_rows = pd.DataFrame([
+                    {
+                        'Account ID': 'TAX-PL',
+                        'Account Name': f'ค่าใช้จ่ายภาษีเงินได้ (Auto {tax_label})',
+                        'TB Net Balance': corporate_tax,
+                        'BS Debit': 0.0, 'BS Credit': 0.0,
+                        'PL Debit': corporate_tax, 'PL Credit': 0.0,
+                        'FS Line Item': 'ภาษีเงินได้', 
+                        'Missing in TB original': False, 'Missing in GL original': False, 'Status': 'Match'
+                    },
+                    {
+                        'Account ID': 'TAX-BS',
+                        'Account Name': f'ภาษีเงินได้ค้างจ่าย (Auto {tax_label})',
+                        'TB Net Balance': corporate_tax,
+                        'BS Debit': 0.0, 'BS Credit': corporate_tax,
+                        'PL Debit': 0.0, 'PL Credit': 0.0,
+                        'FS Line Item': 'สินทรัพย์หมุนเวียนอื่น', 
+                        'Missing in TB original': False, 'Missing in GL original': False, 'Status': 'Match'
+                    }
+                ])
+                merged_df = pd.concat([merged_df, tax_rows], ignore_index=True)
+
+            # ==========================================
+            # 3. GET EXACT FS VALUE (NETTING LOGIC)
+            # ==========================================
             def get_fs_value(row):
                 fs_line = row.get('FS Line Item', '')
+                if fs_line == 'ไม่จัดประเภท (Unmapped)':
+                    return row.get('TB Net Balance', 0.0)
+                    
                 rules = FS_LINE_ITEMS.get(fs_line, {})
-                side = rules.get('side', 'bs_debit')
-                col_map = {
-                    'bs_debit': 'BS Debit',
-                    'bs_credit': 'BS Credit',
-                    'pl_debit': 'PL Debit',
-                    'pl_credit': 'PL Credit',
-                }
-                col = col_map.get(side, 'TB Net Balance')
-                return row.get(col, row.get('TB Net Balance', 0.0))
-            
+                target_side = rules.get('side', 'bs_debit')
+                
+                bs_dr = row.get('BS Debit', 0.0)
+                bs_cr = row.get('BS Credit', 0.0)
+                pl_dr = row.get('PL Debit', 0.0)
+                pl_cr = row.get('PL Credit', 0.0)
+                
+                if bs_dr == 0 and bs_cr == 0 and pl_dr == 0 and pl_cr == 0:
+                    return row.get('TB Net Balance', 0.0)
+
+                if target_side == 'bs_debit': return bs_dr - bs_cr
+                elif target_side == 'bs_credit': return bs_cr - bs_dr
+                elif target_side == 'pl_debit': return pl_dr - pl_cr
+                elif target_side == 'pl_credit': return pl_cr - pl_dr
+                
+                return row.get('TB Net Balance', 0.0)
+
             mapping_df = merged_df[['Account ID', 'Account Name', 'TB Net Balance', 'BS Debit', 'BS Credit', 'PL Debit', 'PL Credit', 'FS Line Item']].copy()
-            mapping_df['FS Value'] = merged_df.apply(get_fs_value, axis=1)
-            
-            edited_mapping = st.data_editor(
-                mapping_df,
-                column_config={
-                    "FS Line Item": st.column_config.SelectboxColumn(
-                        "FS Line Item",
-                        help="Select the FS Line Item for this account",
-                        width="medium",
-                        options=list(FS_LINE_ITEMS.keys()) + ["ไม่จัดประเภท (Unmapped)"],
-                        required=True,
-                    ),
-                    "TB Net Balance": st.column_config.NumberColumn("TB Net Balance", format="%,.2f"),
-                    "BS Debit": st.column_config.NumberColumn("งบดุล เดบิต", format="%,.2f"),
-                    "BS Credit": st.column_config.NumberColumn("งบดุล เครดิต", format="%,.2f"),
-                    "PL Debit": st.column_config.NumberColumn("งบกำไรขาดทุน เดบิต", format="%,.2f"),
-                    "PL Credit": st.column_config.NumberColumn("งบกำไรขาดทุน เครดิต", format="%,.2f"),
-                    "FS Value": st.column_config.NumberColumn("📊 FS Value (ใช้สร้างงบ)", format="%,.2f"),
-                },
-                disabled=["Account ID", "Account Name", "TB Net Balance", "FS Value"],
-                use_container_width=True,
-                key="mapping_editor"
-            )
+            mapping_df['FS Value'] = mapping_df.apply(get_fs_value, axis=1)
+            mapping_df = mapping_df.sort_values(by=['FS Line Item', 'Account ID'])
 
-            # Update merged_df with the edited mapping
+            col_editor, col_summary = st.columns([7, 3])
+
+            with col_editor:
+                st.markdown("##### 📝 Detailed Account Mapping")
+                edited_mapping = st.data_editor(
+                    mapping_df,
+                    column_config={
+                        "FS Line Item": st.column_config.SelectboxColumn(
+                            "📌 FS Line Item (Group)",
+                            options=list(FS_LINE_ITEMS.keys()) + ["ไม่จัดประเภท (Unmapped)"],
+                            required=True,
+                        ),
+                        "Account ID": st.column_config.Column(disabled=True),
+                        "Account Name": st.column_config.Column(disabled=True),
+                        "FS Value": st.column_config.NumberColumn("📊 FS Value (สุทธิ)", format="%,.2f"),
+                        "BS Debit": None, "BS Credit": None, "PL Debit": None, "PL Credit": None, "TB Net Balance": None
+                    },
+                    use_container_width=True,
+                    height=600,
+                    key="mapping_editor"
+                )
+
+            with col_summary:
+                st.markdown("##### 📈 Live FS Summary")
+                summary_df = edited_mapping.groupby('FS Line Item')['FS Value'].sum().reset_index()
+                
+                def highlight_unmapped(row):
+                    if row['FS Line Item'] == 'ไม่จัดประเภท (Unmapped)' and row['FS Value'] > 0:
+                        return ['background-color: #ffcccc'] * len(row)
+                    return [''] * len(row)
+
+                st.dataframe(
+                    summary_df.style.apply(highlight_unmapped, axis=1).format({"FS Value": "{:,.2f}"}),
+                    use_container_width=True,
+                    height=600,
+                    hide_index=True
+                )
+
             merged_df['FS Line Item'] = edited_mapping['FS Line Item']
-            # Also update the editable BS/PL columns back
-            for col in ['BS Debit', 'BS Credit', 'PL Debit', 'PL Credit']:
-                merged_df[col] = edited_mapping[col]
+            merged_df['FS Value'] = edited_mapping['FS Value']
 
-            # Show live preview of the generated FS using correct columns
-            st.subheader("Financial Statement Preview")
-            st.write("Click on any line item to see the accounts that make up its total.")
-            
+            # ==========================================
+            # 4. HIERARCHICAL FS PREVIEW (BALANCE SHEET)
+            # ==========================================
+            st.write("---")
+            st.subheader("📑 Interactive Balance Sheet Preview (งบฐานะการเงิน)")
+            st.write("Review the final structure. Click on line items to see the raw TB data. Highlighted rows are auto-calculated.")
+
+            pl_summary = {}
             for fs_line, rules in FS_LINE_ITEMS.items():
-                side = rules.get('side', 'bs_debit')
-                col_map = {'bs_debit': 'BS Debit', 'bs_credit': 'BS Credit', 'pl_debit': 'PL Debit', 'pl_credit': 'PL Credit'}
-                col = col_map.get(side, 'TB Net Balance')
-                mask = merged_df['FS Line Item'] == fs_line
-                line_df = merged_df[mask]
-                if line_df.empty:
+                if rules['side'] in ['pl_debit', 'pl_credit']:
+                    pl_summary[fs_line] = edited_mapping.loc[edited_mapping['FS Line Item'] == fs_line, 'FS Value'].sum()
+            
+            pl_computed = build_fs_from_mapping(pl_summary, FS_PL_STRUCTURE)
+            net_profit = pl_computed.get('กำไร(ขาดทุน)สุทธิ', 0.0)
+
+            bs_summary = {}
+            for fs_line, rules in FS_LINE_ITEMS.items():
+                if rules['side'] in ['bs_debit', 'bs_credit']:
+                    bs_summary[fs_line] = edited_mapping.loc[edited_mapping['FS Line Item'] == fs_line, 'FS Value'].sum()
+            
+            bs_summary['กำไร(ขาดทุน)สะสม'] = bs_summary.get('กำไร(ขาดทุน)สะสม', 0.0) + net_profit
+            
+            total_share_capital = fs_shares * fs_par
+            if total_share_capital > 0:
+                bs_summary['ทุนเรือนหุ้น'] = total_share_capital
+
+            bs_computed = build_fs_from_mapping(bs_summary, FS_BS_STRUCTURE)
+
+            for row_type, label, note, key in FS_BS_STRUCTURE:
+                if row_type == 'spacer':
+                    st.write("") 
                     continue
-                total = line_df[col].sum() if col in line_df.columns else line_df['TB Net Balance'].sum()
-                side_label = {"bs_debit": "งบดุล เดบิต", "bs_credit": "งบดุล เครดิต", "pl_debit": "งบกำไรขาดทุน เดบิต", "pl_credit": "งบกำไรขาดทุน เครดิต"}.get(side, "")
-                with st.expander(f"**{fs_line}** — Total: **{total:,.2f}** ({side_label})"):
-                    display_cols = ['Account ID', 'Account Name', col]
-                    st.dataframe(line_df[display_cols].reset_index(drop=True), use_container_width=True, column_config={col: num_config})
 
-            # Show unmapped items if any
-            unmapped = merged_df[merged_df['FS Line Item'] == "ไม่จัดประเภท (Unmapped)"]
-            if not unmapped.empty:
-                unmapped_total = unmapped['TB Net Balance'].sum()
-                with st.expander(f"⚠️ **ไม่จัดประเภท (Unmapped)** — Total: **{unmapped_total:,.2f}**"):
-                    st.dataframe(unmapped[['Account ID', 'Account Name', 'TB Net Balance']].reset_index(drop=True), use_container_width=True, column_config={'TB Net Balance': num_config})
+                if row_type == 'header':
+                    st.markdown(f"#### 🏛️ {label}")
+                    continue
 
+                if row_type == 'subtotal':
+                    val = bs_computed.get(label, 0.0)
+                    if "รวมหนี้สินและส่วนของเจ้าของ" in label or label == "รวมสินทรัพย์":
+                        st.success(f"**{label}** \n### {val:,.2f} บาท")
+                    else:
+                        st.info(f"**∑ {label}** : {val:,.2f}")
+                    continue
 
+                if row_type == 'item':
+                    item_total = bs_computed.get(label, 0.0)
+                    
+                    if key == 'ทุนเรือนหุ้น':
+                        with st.expander(f"📄 **{label}** : {item_total:,.2f}"):
+                            st.caption("Auto-calculated from Company Info settings:")
+                            st.write(f"- ทุนจดทะเบียนหุ้นสามัญ {fs_shares:,.0f} หุ้น มูลค่าหุ้นละ {fs_par:,.2f} บาท")
+                            st.write(f"- ทุนที่ออกและเรียกชำระแล้ว {fs_shares:,.0f} หุ้น มูลค่าหุ้นละ {fs_par:,.2f} บาท")
+                    
+                    elif key == 'กำไร(ขาดทุน)สะสม':
+                        with st.expander(f"📄 **{label}** (ยังไม่ได้จัดสรร) : {item_total:,.2f}"):
+                            st.caption("Retained Earnings + Current Year Net Profit")
+                            tb_re = bs_summary.get('กำไร(ขาดทุน)สะสม', 0.0) - net_profit
+                            st.write(f"- กำไรสะสมต้นงวด (จาก TB): {tb_re:,.2f}")
+                            st.write(f"- กำไร(ขาดทุน)สุทธิปีปัจจุบัน: {net_profit:,.2f}")
+                    
+                    else:
+                        with st.expander(f"📄 **{label}** : {item_total:,.2f}"):
+                            mask = edited_mapping['FS Line Item'] == key
+                            line_df = edited_mapping[mask]
+                            if not line_df.empty:
+                                display_df = line_df[['Account ID', 'Account Name', 'FS Value']].reset_index(drop=True)
+                                st.dataframe(
+                                    display_df, 
+                                    use_container_width=True, 
+                                    column_config={
+                                        "Account ID": "รหัสบัญชี",
+                                        "Account Name": "ชื่อบัญชี",
+                                        "FS Value": st.column_config.NumberColumn("ยอดเงิน (Value)", format="%,.2f")
+                                    }
+                                )
+                            else:
+                                st.warning("ยังไม่มีบัญชีที่ผูกกับรายการนี้")
         with tab_export:
             st.write("Download your reconciled data or generate the finalized Financial Statements.")
 
