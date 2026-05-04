@@ -138,6 +138,96 @@ def parse_tb(excel_file):
             
     return pd.DataFrame(tb_data)
 
+
+def _clean_thai_pdf_text(text):
+    """Clean Thai font encoding artifacts from PDF text.
+    
+    Some PDF fonts use private-use Unicode area (U+F700-U+F74F) for Thai characters.
+    These look like garbled text but map to normal Thai characters.
+    This function strips them back to readable Thai text using a mapping table.
+    """
+    # Map private-use Thai font characters to normal Unicode Thai
+    thai_font_map = {
+        '\uf700': '\u0e40', '\uf701': '\u0e41', '\uf702': '\u0e42', '\uf703': '\u0e43',
+        '\uf704': '\u0e44', '\uf705': '\u0e48', '\uf706': '\u0e49', '\uf707': '\u0e4a',
+        '\uf708': '\u0e4b', '\uf709': '\u0e4c', '\uf70a': '\u0e48', '\uf70b': '\u0e49',
+        '\uf70c': '\u0e4a', '\uf70d': '\u0e4b', '\uf70e': '\u0e4c', '\uf70f': '\u0e4d',
+        '\uf710': '\u0e31', '\uf711': '\u0e34', '\uf712': '\u0e35', '\uf713': '\u0e36',
+        '\uf714': '\u0e37', '\uf715': '\u0e38', '\uf716': '\u0e39', '\uf717': '\u0e47',
+        '\uf718': '\u0e48', '\uf719': '\u0e49', '\uf71a': '\u0e4a', '\uf71b': '\u0e4b',
+        '\uf71c': '\u0e4c',
+    }
+    for char, replacement in thai_font_map.items():
+        text = text.replace(char, replacement)
+    # Remove any remaining private-use characters
+    text = re.sub(r'[\uf700-\uf74f]', '', text)
+    return text
+
+
+def parse_tb_working_paper_pdf(pdf_file):
+    """Parse กระดาษทำการ (Working Paper) in PDF format.
+    
+    This PDF has 3 column groups (each with Debit/Credit):
+      1. งบทดลอง   (TB)  — The full trial balance (Debit = Credit for every account)
+      2. งบกำไรขาดทุน (P&L) — P&L accounts only
+      3. งบดุล       (BS)  — Balance sheet accounts only
+    
+    The net balance for each account is the LAST number printed on that line
+    (either the BS or P&L column, whichever applies).
+    We do NOT use the งบทดลอง pair because Debit always equals Credit there.
+    """
+    doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
+    text = ""
+    for page in doc:
+        text += page.get_text()
+    
+    lines = text.split('\n')
+    tb_data = []
+    
+    for raw_line in lines:
+        line = raw_line.rstrip('\r\n')
+        stripped = line.strip()
+        
+        # Match lines starting with an account ID like '  1111-00'
+        match = re.match(r'^\s*(\d{4}-\d{2})\s+(.*)', line)
+        if not match:
+            continue
+        
+        acc_id = match.group(1)
+        rest = match.group(2)
+        
+        # Find ALL numbers on this line
+        all_nums = re.findall(r'([\d,]+\.\d{2})', rest)
+        if not all_nums:
+            continue
+        
+        # The LAST number is the net balance (งบดุล or งบกำไรขาดทุน column)
+        net_balance = float(all_nums[-1].replace(',', ''))
+        
+        # Derive a pseudo debit/credit: for BS accounts (1/2/3), treat as debit-normal;
+        # for P&L (4/5), treat as debit-normal. We just store net balance.
+        # For TB Debit/Credit columns, use the first number (งบทดลอง debit side)
+        tb_gross = float(all_nums[0].replace(',', ''))
+        
+        # Extract account name: text between the account ID column and the first number
+        name_match = re.match(r'^(.+?)(?=\s{3,}[\d,]+\.\d{2})', rest)
+        if name_match:
+            acc_name = _clean_thai_pdf_text(name_match.group(1).strip())
+            if re.match(r'^[\d,]+\.\d{2}$', acc_name):
+                acc_name = "Unknown"
+        else:
+            acc_name = "Unknown"
+        
+        tb_data.append({
+            'Account ID': acc_id,
+            'Account Name': acc_name,
+            'TB Debit': net_balance,   # Net balance stored as debit for compatibility
+            'TB Credit': 0.0,
+            'TB Net Balance': net_balance
+        })
+    
+    return pd.DataFrame(tb_data)
+
 def parse_gl(pdf_file):
     # Read PDF text
     doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
@@ -228,11 +318,11 @@ def main():
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        tb_file = st.file_uploader("Upload Trial Balance (Excel .xls or .xlsx)", type=["xls", "xlsx"])
+        tb_file = st.file_uploader("Upload Trial Balance / กระดาษทำการ (Excel or PDF)", type=["xls", "xlsx", "pdf"])
     with col2:
-        gl_file = st.file_uploader("Upload General Ledger (PDF)", type=["pdf"])
+        gl_file = st.file_uploader("Upload General Ledger / บัญชีแยกประเภท (PDF)", type=["pdf"])
     with col3:
-        tb_pdf_file = st.file_uploader("Upload Trial Balance for BF Check (PDF)", type=["pdf"])
+        tb_pdf_file = st.file_uploader("Upload Trial Balance for BF Check / งบทดลอง (PDF)", type=["pdf"])
         
     if st.button("Run Reconciliation", type="primary"):
         if not tb_file or not gl_file:
@@ -240,11 +330,16 @@ def main():
             return
             
         with st.spinner("Processing files... This may take a moment."):
-            # Parse TB
+            # Parse TB (support both Excel and PDF กระดาษทำการ)
             try:
-                tb_df = parse_tb(tb_file)
+                tb_filename = tb_file.name.lower()
+                if tb_filename.endswith('.pdf'):
+                    tb_df = parse_tb_working_paper_pdf(tb_file)
+                    st.info("ตรวจพบ กระดาษทำการ PDF — ใช้ตัวเลขคอลัมน์งบทดลอง (เดบิต/เครดิต) จากไฟล์นี้")
+                else:
+                    tb_df = parse_tb(tb_file)
             except Exception as e:
-                st.error(f"Error reading TB Excel file: {e}")
+                st.error(f"Error reading TB file: {e}")
                 return
                 
             # Parse GL
@@ -301,7 +396,7 @@ def main():
             merged_df['Difference'] = abs(merged_df['GL Net Balance'] - merged_df['TB Net Balance'])
             merged_df['Is Match'] = merged_df['Difference'] <= 0.02
             
-            merged_df['BF Difference'] = abs(merged_df['GL Brought Forward'] - merged_df['TB Brought Forward Net'])
+            merged_df['BF Difference'] = abs(abs(merged_df['GL Brought Forward']) - merged_df['TB Brought Forward Net'])
             
             # Status Logic
             def determine_status(row):
@@ -350,13 +445,21 @@ def main():
             # Common numeric formatting configuration
             num_config = st.column_config.NumberColumn(format="%,.2f")
             common_col_config = {
-                'GL Net Balance': num_config,
-                'TB Net Balance': num_config,
-                'Difference': num_config,
-                'GL Brought Forward': num_config,
-                'TB Brought Forward Net': num_config,
-                'BF Difference': num_config,
-                'Max Absolute Balance': num_config,
+                'GL Net Balance': st.column_config.NumberColumn("GL Net Balance (บัญชีแยกประเภท)", format="%,.2f"),
+                'TB Net Balance': st.column_config.NumberColumn("TB Net Balance (กระดาษทำการ)", format="%,.2f"),
+                'Difference': st.column_config.NumberColumn("Difference", format="%,.2f"),
+                'GL Brought Forward': st.column_config.NumberColumn("GL Brought Forward (บัญชีแยกประเภท)", format="%,.2f"),
+                'TB Brought Forward Net': st.column_config.NumberColumn("TB Brought Forward Net (งบทดลอง)", format="%,.2f"),
+                'BF Difference': st.column_config.NumberColumn("BF Difference", format="%,.2f"),
+                'Max Absolute Balance': st.column_config.NumberColumn("Max Absolute Balance", format="%,.2f"),
+            }
+            
+            tab4_col_config = {
+                'GL Net Balance': st.column_config.Column("GL Net Balance (บัญชีแยกประเภท)"),
+                'TB Net Balance': st.column_config.Column("TB Net Balance (กระดาษทำการ)"),
+                'GL Brought Forward': st.column_config.Column("GL Brought Forward (บัญชีแยกประเภท)"),
+                'TB Brought Forward Net': st.column_config.Column("TB Brought Forward Net (งบทดลอง)"),
+                'BF Difference': st.column_config.NumberColumn("BF Difference", format="%,.2f")
             }
             
             with tab1:
@@ -375,7 +478,23 @@ def main():
                 
             with tab4:
                 st.write(f"Found {len(matches_df)} perfectly matched accounts.")
-                st.dataframe(matches_df[['Account ID', 'Account Name', 'GL Net Balance', 'TB Net Balance', 'GL Brought Forward', 'TB Brought Forward Net', 'BF Difference', 'Status']], use_container_width=True, column_config=common_col_config)
+                
+                display_matches_df = matches_df[['Account ID', 'Account Name', 'GL Net Balance', 'TB Net Balance', 'GL Brought Forward', 'TB Brought Forward Net', 'BF Difference', 'Status']].copy()
+                
+                # Format numeric columns to strings to preserve formatting when replacing with 'N/A'
+                for col in ['GL Net Balance', 'TB Net Balance', 'GL Brought Forward', 'TB Brought Forward Net']:
+                    display_matches_df[col] = display_matches_df[col].apply(lambda x: f"{x:,.2f}")
+                
+                # Replace with 'N/A' for missing accounts
+                missing_tb_mask = matches_df['Missing in TB original']
+                display_matches_df.loc[missing_tb_mask, 'TB Net Balance'] = 'N/A'
+                display_matches_df.loc[missing_tb_mask, 'TB Brought Forward Net'] = 'N/A'
+                
+                missing_gl_mask = matches_df['Missing in GL original']
+                display_matches_df.loc[missing_gl_mask, 'GL Net Balance'] = 'N/A'
+                display_matches_df.loc[missing_gl_mask, 'GL Brought Forward'] = 'N/A'
+                
+                st.dataframe(display_matches_df, use_container_width=True, column_config=tab4_col_config)
                 
             with tab_map:
                 st.write("Review the auto-mapped Financial Statement Line Items. You can edit them directly in the table below.")
@@ -432,12 +551,23 @@ def main():
                     # Original Reconciliation Export
                     buffer_recon = io.BytesIO()
                     with pd.ExcelWriter(buffer_recon, engine='xlsxwriter') as writer:
-                        export_df = merged_df.drop(columns=['Missing in TB original', 'Missing in GL original'])
+                        rename_dict = {
+                            'TB Net Balance': 'TB Net Balance (กระดาษทำการ)',
+                            'GL Net Balance': 'GL Net Balance (บัญชีแยกประเภท)',
+                            'TB Brought Forward Net': 'TB Brought Forward Net (งบทดลอง)',
+                            'GL Brought Forward': 'GL Brought Forward (บัญชีแยกประเภท)',
+                            'TB Debit': 'TB Debit (กระดาษทำการ)',
+                            'TB Credit': 'TB Credit (กระดาษทำการ)',
+                            'GL Debit': 'GL Debit (บัญชีแยกประเภท)',
+                            'GL Credit': 'GL Credit (บัญชีแยกประเภท)'
+                        }
+                        
+                        export_df = merged_df.drop(columns=['Missing in TB original', 'Missing in GL original']).rename(columns=rename_dict)
                         export_df.to_excel(writer, sheet_name='All Accounts', index=False)
-                        mismatches_df.to_excel(writer, sheet_name='Discrepancies', index=False)
-                        missing_in_tb_df.to_excel(writer, sheet_name='Missing in TB', index=False)
-                        missing_in_gl_df.to_excel(writer, sheet_name='Missing in GL', index=False)
-                        suspect_df.drop(columns=['Missing in TB original', 'Missing in GL original']).to_excel(writer, sheet_name='Top 10 Suspects', index=False)
+                        mismatches_df.rename(columns=rename_dict).to_excel(writer, sheet_name='Discrepancies', index=False)
+                        missing_in_tb_df.rename(columns=rename_dict).to_excel(writer, sheet_name='Missing in TB', index=False)
+                        missing_in_gl_df.rename(columns=rename_dict).to_excel(writer, sheet_name='Missing in GL', index=False)
+                        suspect_df.drop(columns=['Missing in TB original', 'Missing in GL original']).rename(columns=rename_dict).to_excel(writer, sheet_name='Top 10 Suspects', index=False)
                     
                     st.download_button(
                         label="Download Reconciliation Data",
