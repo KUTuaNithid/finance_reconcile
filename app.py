@@ -692,7 +692,207 @@ def parse_tb_pdf(pdf_file):
     return pd.DataFrame(tb_bf_data)
 
 
+
+def parse_prior_fs_excel(fs_file):
+    """Parse a prior year FS Excel file and extract line item values.
+    
+    Strategy:
+    1. Exact match: label in Excel == key in fs_line_items config
+    2. Structure match: label in Excel == item label in BS/PL structure
+       (handles computed items like อุปกรณ์-สุทธิ that are items in the structure
+       but computed from multiple fs_line_items)
+    3. Fuzzy match: if the Excel label contains a config key or vice versa
+       (handles cases like "ค่าใช้จ่ายในการบริหาร" matching "ค่าใช้จ่ายในการขายและบริหาร")
+    
+    Returns: dict {fs_line_item_name: value}
+    """
+    active_items = get_fs_line_items()
+    all_config_keys = set(active_items.keys())
+    
+    # Build lookup for BS/PL structure item labels → config key
+    # This handles items with list keys (e.g. อุปกรณ์-สุทธิ → computed from [อุปกรณ์-สุทธิ, -ค่าเสื่อมราคาสะสม])
+    # For these, when we find the label in the FS, we store it as the structure item label directly
+    structure_item_labels = set()
+    active_bs = get_bs_structure()
+    active_pl = get_pl_structure()
+    for struct in [active_bs, active_pl]:
+        for row in struct:
+            r_type, r_label, r_note, r_key = row
+            if r_type == 'item' and r_label:
+                structure_item_labels.add(r_label.strip() if isinstance(r_label, str) else r_label)
+    
+    # Combined: config keys + structure item labels
+    all_known_labels = all_config_keys | structure_item_labels
+    
+    wb = openpyxl.load_workbook(fs_file, data_only=True)
+    extracted = {}
+    
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        for row in ws.iter_rows(min_row=1, max_row=ws.max_row):
+            # Get first non-empty text cell in cols A-D
+            cell_label = None
+            label_col = None
+            for cell in row[:4]:
+                if cell.value and isinstance(cell.value, str):
+                    cell_label = cell.value.strip()
+                    label_col = cell.column
+                    break
+            
+            if not cell_label:
+                continue
+            
+            # Try matching strategies
+            matched_key = None
+            
+            # Strategy 1: Exact match against config keys or structure labels
+            if cell_label in all_known_labels:
+                matched_key = cell_label
+            
+            # Strategy 2: Fuzzy matching for non-exact labels
+            # Skip subtotal/header labels that shouldn't match line items
+            if not matched_key:
+                skip_keywords = ["รวม", "กำไร(ขาดทุน)ก่อน", "กำไร(ขาดทุน)สุทธิ"]
+                is_subtotal_label = any(kw in cell_label for kw in skip_keywords)
+                
+                if not is_subtotal_label:
+                    best_match = None
+                    best_score = 0
+                    for config_key in all_config_keys:
+                        score = 0
+                        
+                        # Method A: Substring match with length ratio check
+                        if cell_label in config_key or config_key in cell_label:
+                            shorter = min(len(cell_label), len(config_key))
+                            longer = max(len(cell_label), len(config_key))
+                            if shorter / longer >= 0.5:
+                                score = shorter
+                        
+                        # Method B: Common prefix + suffix match
+                        # Handles "ค่าใช้จ่ายในการบริหาร" → "ค่าใช้จ่ายในการขายและบริหาร"
+                        if score == 0:
+                            # Common prefix length
+                            p = 0
+                            while p < min(len(cell_label), len(config_key)) and cell_label[p] == config_key[p]:
+                                p += 1
+                            # Common suffix length
+                            s = 0
+                            while s < min(len(cell_label) - p, len(config_key) - p) and cell_label[-(s+1)] == config_key[-(s+1)]:
+                                s += 1
+                            total_common = p + s
+                            # Require at least 70% of the shorter label to match
+                            shorter = min(len(cell_label), len(config_key))
+                            if shorter > 0 and total_common / shorter >= 0.7 and p >= 3:
+                                score = total_common
+                        
+                        if score > best_score:
+                            best_match = config_key
+                            best_score = score
+                    
+                    if best_match:
+                        matched_key = best_match
+            
+            if not matched_key:
+                continue
+            
+            # Find the rightmost numeric value in this row
+            best_val = None
+            for cell in row:
+                if cell.column <= (label_col or 1):
+                    continue
+                if isinstance(cell.value, (int, float)) and cell.value is not None:
+                    best_val = float(cell.value)
+            
+            if best_val is not None:
+                if matched_key not in extracted:
+                    extracted[matched_key] = best_val
+    
+    wb.close()
+    return extracted
+
+
 st.set_page_config(page_title="Finance Reconcile", layout="wide", page_icon="📊")
+
+def extract_tax_from_working_paper(excel_file):
+    """Extract tax data from the tax calculation section of a working paper Excel file.
+    
+    Looks for the 'การคำนวณภาษีเงินได้นิติบุคคล' section and extracts:
+    - tax_amount: ภาษีเงินได้นิติบุคคล (corporate tax)
+    - taxable_profit: กำไรสุทธิทางภาษี (after tax adjustments)
+    - accounting_profit: กำไรสุทธิทางบัญชี
+    - non_deductible: ค่าใช้จ่ายต้องห้าม
+    - prepaid_tax: ภาษีเงินได้นิติบุคคลจ่ายล่วงหน้า
+    
+    Returns: dict or None if tax section not found.
+    """
+    try:
+        wb = openpyxl.load_workbook(excel_file, data_only=True)
+    except Exception:
+        return None
+    
+    result = {
+        'tax_amount': None,
+        'taxable_profit': None,
+        'accounting_profit': None,
+        'non_deductible': None,
+        'prepaid_tax': None,
+        'withholding_tax': None,
+    }
+    
+    found_section = False
+    
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        for row in ws.iter_rows(min_row=1, max_row=ws.max_row):
+            cell_a = str(row[0].value or '').replace('\xa0', ' ').strip()
+            cell_b = str(row[1].value or '').replace('\xa0', ' ').strip() if len(row) > 1 else ''
+            combined = (cell_a + ' ' + cell_b).strip()
+            
+            if 'การคำนวณภาษีเงินได้นิติบุคคล' in combined:
+                found_section = True
+                continue
+            
+            if not found_section:
+                continue
+            
+            def get_num(cell):
+                if cell and isinstance(cell.value, (int, float)):
+                    return float(cell.value)
+                return None
+            
+            col_c = get_num(row[2]) if len(row) > 2 else None
+            col_d = get_num(row[3]) if len(row) > 3 else None
+            
+            if 'กำไรสุทธิทางบัญชี' in combined and col_d is not None:
+                result['accounting_profit'] = col_d
+            
+            if 'ค่าใช้จ่ายต้องห้าม' in combined:
+                if isinstance(col_d, float): result['non_deductible'] = col_d
+                elif isinstance(col_c, float): result['non_deductible'] = col_c
+            
+            if ('กำไร(ขาดทุน)สุทธิทางภาษี' in combined or 'กำไรสุทธิทางภาษี' in combined) and col_d is not None:
+                result['taxable_profit'] = col_d
+            
+            if 'อัตราภาษี' in combined and '300,000' not in combined and 'ได้รับยกเว้น' not in combined:
+                if col_d is not None:
+                    result['tax_amount'] = col_d
+                elif col_c is not None:
+                    result['tax_amount'] = col_c
+            
+            if 'ภาษีเงินได้นิติบุคคลจ่ายล่วงหน้า' in combined and col_d is not None:
+                result['prepaid_tax'] = col_d
+            
+            if 'ภาษีถูกหัก' in combined and 'ม.3' in combined and 'ค้างจ่าย' not in combined:
+                if col_c is not None and result['withholding_tax'] is None:
+                    result['withholding_tax'] = col_c
+    
+    wb.close()
+    
+    if not found_section:
+        return None
+    
+    return result
+
 
 def parse_tb(excel_file):
     df = pd.read_excel(excel_file, header=None)
@@ -1154,10 +1354,30 @@ def main():
     with col2: gl_file = st.file_uploader("Upload General Ledger / บัญชีแยกประเภท (PDF)", type=["pdf"])
     with col3: tb_pdf_file = st.file_uploader("Upload Trial Balance for BF Check / งบทดลอง (PDF)", type=["pdf"])
     
-    with st.expander("📊 อัปโหลดกระดาษทำการปีก่อนหน้า (สำหรับสร้างงบเปรียบเทียบ)", expanded=False):
-        col_py1, col_py2 = st.columns([1, 2])
-        with col_py1: prior_year_label = st.text_input("ปีก่อนหน้า", value=default_prior_year, key='prior_year_label')
-        with col_py2: prior_tb_file = st.file_uploader("Upload Prior Year กระดาษทำการ (Excel or PDF)", type=["xls", "xlsx", "pdf"], key='prior_tb_upload')
+    with st.expander("📊 อัปโหลดข้อมูลปีก่อนหน้า (สำหรับสร้างงบเปรียบเทียบ)", expanded=False):
+        col_py1, col_py2 = st.columns([1, 3])
+        with col_py1: 
+            prior_year_label = st.text_input("ปีก่อนหน้า", value=default_prior_year, key='prior_year_label')
+            prior_upload_mode = st.radio(
+                "ประเภทไฟล์",
+                ["กระดาษทำการ (Working Paper)", "งบการเงิน (FS)"],
+                key='prior_upload_mode',
+                help="**กระดาษทำการ**: ไฟล์ Excel/PDF ที่มีรายละเอียดบัญชี → ระบบจะคำนวณให้\n\n**งบการเงิน (FS)**: ไฟล์ FS Excel ที่สร้างจากระบบนี้หรืองบที่ finalize แล้ว → นำเข้าตัวเลขโดยตรง ไม่ต้องคำนวณ"
+            )
+        with col_py2:
+            if prior_upload_mode == "กระดาษทำการ (Working Paper)":
+                prior_tb_file = st.file_uploader(
+                    "Upload Prior Year กระดาษทำการ (Excel or PDF)", 
+                    type=["xls", "xlsx", "pdf"], key='prior_tb_upload'
+                )
+                prior_fs_file = None
+            else:
+                prior_fs_file = st.file_uploader(
+                    "Upload Prior Year งบการเงิน FS (Excel)", 
+                    type=["xls", "xlsx"], key='prior_fs_upload',
+                    help="อัปโหลดไฟล์ FS Excel (เช่น FS_บริษัทxxx.xlsx ที่สร้างจากระบบนี้) — ระบบจะดึงตัวเลขจากรายการที่ตรงกับ config โดยตรง"
+                )
+                prior_tb_file = None
         
     run_clicked = st.button("Run Reconciliation", type="primary")
     should_process = False
@@ -1252,6 +1472,18 @@ def main():
             st.session_state['recon_missing_tb_df'] = missing_in_tb_df
             st.session_state['recon_matches_df'] = matches_df
             st.session_state['recon_suspect_df'] = suspect_df
+            # Extract tax data from working paper DURING initial processing
+            wp_tax_info = None
+            if tb_file and hasattr(tb_file, 'name') and not tb_file.name.lower().endswith('.pdf'):
+                try:
+                    tb_file.seek(0)
+                    file_bytes = tb_file.read()
+                    tb_file.seek(0)
+                    wp_tax_info = extract_tax_from_working_paper(io.BytesIO(file_bytes))
+                except Exception as e:
+                    st.warning(f"⚠️ ไม่สามารถอ่านข้อมูลภาษีจากกระดาษทำการ: {e}")
+                    wp_tax_info = None
+            st.session_state['_wp_tax_info'] = wp_tax_info
             st.session_state['data_parsed'] = True
 
     if st.session_state.get('data_parsed', False):
@@ -1301,44 +1533,98 @@ def main():
             st.write("### 🗂️ Master FS Mapping & Verification")
             st.write("Review your mapping and see exactly where the data comes from before generating **FS.xlsx**.")
 
-            rev_total = merged_df[merged_df['Account ID'].str.startswith('4', na=False)]['PL Credit'].sum() - merged_df[merged_df['Account ID'].str.startswith('4', na=False)]['PL Debit'].sum()
-            exp_total = merged_df[merged_df['Account ID'].str.startswith('5', na=False)]['PL Debit'].sum() - merged_df[merged_df['Account ID'].str.startswith('5', na=False)]['PL Credit'].sum()
-            if rev_total == 0 and exp_total == 0:
-                rev_total = merged_df[merged_df['Account ID'].str.startswith('4', na=False)]['TB Net Balance'].sum()
-                exp_total = merged_df[merged_df['Account ID'].str.startswith('5', na=False)]['TB Net Balance'].sum()
-
-            pre_tax_profit = rev_total - exp_total
+            # ==========================================
+            # CORPORATE TAX — Extract from Working Paper first, fallback to auto-calc
+            # ==========================================
             corporate_tax = 0.0
+            tax_source = ""
+            wp_tax_info = st.session_state.get('_wp_tax_info', None)
             
-            tax_method = st.session_state.get('tax_method', "Auto-Detect จากงบทดลอง (แนะนำ)")
-            applied_tax_rule = tax_method 
-
-            if tax_method == "Auto-Detect จากงบทดลอง (แนะนำ)":
-                has_tax_expense = merged_df['Account Name'].str.contains('ภาษีเงินได้นิติบุคคล|ค่าใช้จ่ายภาษีเงินได้', na=False).any()
-                total_revenue = merged_df[merged_df['Account ID'].str.startswith('4', na=False)]['TB Net Balance'].sum()
-                capital_df = merged_df[(merged_df['Account ID'].str.startswith('3', na=False)) & (merged_df['Account Name'].str.contains('ทุน', na=False))]
-                total_capital = capital_df['TB Net Balance'].sum() if not capital_df.empty else 0.0
-
-                if has_tax_expense:
-                    applied_tax_rule = "ไม่คำนวณอัตโนมัติ (Manual)"
-                    st.info("💡 **Auto-Detect:** พบรหัสบัญชี 'ภาษีเงินได้นิติบุคคล' ในงบทดลอง ระบบจะไม่คำนวณภาษีซ้ำ")
-                elif total_capital <= 5000000 and total_revenue <= 30000000:
-                    applied_tax_rule = "SME (ยกเว้น 300k แรก, 15%-20%)"
-                    st.info(f"💡 **Auto-Detect:** ใช้งานอัตราภาษี **SME** (ทุน {total_capital:,.0f} | รายได้ {total_revenue:,.0f})")
+            if wp_tax_info and wp_tax_info.get('tax_amount') is not None and wp_tax_info['tax_amount'] > 0:
+                corporate_tax = round(wp_tax_info['tax_amount'], 2)
+                tax_source = "working_paper"
+                
+                tp = wp_tax_info.get('taxable_profit')
+                ap = wp_tax_info.get('accounting_profit')
+                nd = wp_tax_info.get('non_deductible')
+                wht = wp_tax_info.get('withholding_tax')
+                prepaid = wp_tax_info.get('prepaid_tax')
+                
+                info_lines = [f"💡 **ภาษีจากกระดาษทำการ:** **{corporate_tax:,.2f}** บาท"]
+                if ap is not None: info_lines.append(f"- กำไรสุทธิทางบัญชี: {ap:,.2f}")
+                if nd is not None and nd != 0: info_lines.append(f"- ค่าใช้จ่ายต้องห้าม: +{nd:,.2f}")
+                if tp is not None: info_lines.append(f"- กำไรสุทธิทางภาษี: {tp:,.2f}")
+                if wht is not None: info_lines.append(f"- ภาษีถูกหัก ณ ที่จ่าย: {wht:,.2f}")
+                if prepaid is not None: info_lines.append(f"- ภาษีจ่ายล่วงหน้า(คืน): {prepaid:,.2f}")
+                st.success("\n".join(info_lines))
+            else:
+                # Step 2: Check if tax account already exists in TB data
+                has_tax_in_tb = merged_df['Account Name'].str.contains(
+                    'ภาษีเงินได้นิติบุคคล|ค่าใช้จ่ายภาษีเงินได้', na=False
+                ).any()
+                
+                if has_tax_in_tb:
+                    tax_source = "from_tb"
+                    st.info("💡 พบรายการ 'ภาษีเงินได้นิติบุคคล' ในงบทดลอง — ใช้ยอดจาก TB โดยตรง (ไม่คำนวณซ้ำ)")
                 else:
-                    applied_tax_rule = "Standard (20%)"
-                    st.info(f"💡 **Auto-Detect:** ใช้งานอัตราภาษี **Standard 20%**")
+                    # Step 3: Auto-calculate as LAST RESORT
+                    tax_method = st.session_state.get('tax_method', "Auto-Detect จากงบทดลอง (แนะนำ)")
+                    applied_tax_rule = tax_method
+                    
+                    rev_total = merged_df[merged_df['Account ID'].str.startswith('4', na=False)]['PL Credit'].sum() - merged_df[merged_df['Account ID'].str.startswith('4', na=False)]['PL Debit'].sum()
+                    exp_total = merged_df[merged_df['Account ID'].str.startswith('5', na=False)]['PL Debit'].sum() - merged_df[merged_df['Account ID'].str.startswith('5', na=False)]['PL Credit'].sum()
+                    if rev_total == 0 and exp_total == 0:
+                        rev_total = merged_df[merged_df['Account ID'].str.startswith('4', na=False)]['TB Net Balance'].sum()
+                        exp_total = merged_df[merged_df['Account ID'].str.startswith('5', na=False)]['TB Net Balance'].sum()
+                    
+                    pre_tax_profit = rev_total - exp_total
+                    
+                    if tax_method == "Auto-Detect จากงบทดลอง (แนะนำ)":
+                        total_revenue = merged_df[merged_df['Account ID'].str.startswith('4', na=False)]['TB Net Balance'].sum()
+                        capital_df = merged_df[(merged_df['Account ID'].str.startswith('3', na=False)) & (merged_df['Account Name'].str.contains('ทุน', na=False))]
+                        total_capital = capital_df['TB Net Balance'].sum() if not capital_df.empty else 0.0
+                        if total_capital <= 5000000 and total_revenue <= 30000000:
+                            applied_tax_rule = "SME (ยกเว้น 300k แรก, 15%-20%)"
+                        else:
+                            applied_tax_rule = "Standard (20%)"
+                    
+                    if applied_tax_rule == "ไม่คำนวณอัตโนมัติ (Manual)":
+                        tax_source = "manual_skip"
+                        st.info("💡 ไม่คำนวณภาษีอัตโนมัติ (Manual mode)")
+                    elif pre_tax_profit > 0:
+                        tax_source = "auto_calc"
+                        # Add back non-deductible expenses to get taxable profit
+                        non_deductible = 0.0
+                        nd_mask = merged_df['Account Name'].str.contains('ค่าใช้จ่ายต้องห้าม|เบี้ยปรับเงินเพิ่ม', na=False)
+                        if nd_mask.any():
+                            non_deductible = merged_df.loc[nd_mask, 'TB Net Balance'].sum()
+                        taxable_profit = pre_tax_profit + non_deductible
+                        
+                        if applied_tax_rule == "Standard (20%)":
+                            corporate_tax = round(taxable_profit * 0.20, 2)
+                        elif applied_tax_rule == "SME (ยกเว้น 300k แรก, 15%-20%)":
+                            if taxable_profit <= 300000:
+                                corporate_tax = 0.0
+                            elif taxable_profit <= 3000000:
+                                corporate_tax = round((taxable_profit - 300000) * 0.15, 2)
+                            else:
+                                corporate_tax = round(405000.0 + (taxable_profit - 3000000) * 0.20, 2)
+                        
+                        warn_lines = ["⚠️ ไม่พบข้อมูลภาษีในกระดาษทำการ — คำนวณอัตโนมัติ"]
+                        warn_lines.append(f"- กำไรก่อนภาษี (ทางบัญชี): {pre_tax_profit:,.2f}")
+                        if non_deductible > 0:
+                            warn_lines.append(f"- บวกค่าใช้จ่ายต้องห้าม: +{non_deductible:,.2f}")
+                            warn_lines.append(f"- กำไรสุทธิทางภาษี: {taxable_profit:,.2f}")
+                        warn_lines.append(f"- อัตราภาษี: {applied_tax_rule}")
+                        warn_lines.append(f"- ภาษีคำนวณได้: {corporate_tax:,.2f}")
+                        warn_lines.append("⚠️ แนะนำให้ใช้กระดาษทำการ Excel เพื่อความถูกต้อง")
+                        st.warning("\n".join(warn_lines))
 
-            if pre_tax_profit > 0 and applied_tax_rule != "ไม่คำนวณอัตโนมัติ (Manual)":
-                if applied_tax_rule == "Standard (20%)": corporate_tax = round(pre_tax_profit * 0.20, 2)
-                elif applied_tax_rule == "SME (ยกเว้น 300k แรก, 15%-20%)":
-                    if pre_tax_profit <= 300000: corporate_tax = 0.0
-                    elif pre_tax_profit <= 3000000: corporate_tax = round((pre_tax_profit - 300000) * 0.15, 2)
-                    else: corporate_tax = 405000.0 + round((pre_tax_profit - 3000000) * 0.20, 2)
-
-            if corporate_tax > 0 and not (merged_df['Account ID'] == 'TAX-PL').any():
-                tax_label = "SME" if "SME" in applied_tax_rule else "Standard"
-                # Find the tax line item name and other CA name from config
+            
+            # Inject tax rows if needed
+            if corporate_tax > 0 and tax_source in ("working_paper", "auto_calc") and not (merged_df['Account ID'] == 'TAX-PL').any():
+                src_label = "WP" if tax_source == "working_paper" else "Auto"
+                # Find config names dynamically
                 tax_fs_name = L_TAX
                 other_ca_fs_name = L_OTHER_CA
                 for name, rules in active_items.items():
@@ -1349,12 +1635,12 @@ def main():
                 
                 tax_rows = pd.DataFrame([
                     {
-                        'Account ID': 'TAX-PL', 'Account Name': f'ค่าใช้จ่ายภาษีเงินได้ (Auto {tax_label})',
+                        'Account ID': 'TAX-PL', 'Account Name': f'ค่าใช้จ่ายภาษีเงินได้ ({src_label})',
                         'TB Net Balance': corporate_tax, 'BS Debit': 0.0, 'BS Credit': 0.0, 'PL Debit': corporate_tax, 'PL Credit': 0.0,
                         'FS Line Item': tax_fs_name, 'Missing in TB original': False, 'Missing in GL original': False, 'Status': 'Match'
                     },
                     {
-                        'Account ID': 'TAX-BS', 'Account Name': f'ภาษีเงินได้ค้างจ่าย (Auto {tax_label})',
+                        'Account ID': 'TAX-BS', 'Account Name': f'ภาษีเงินได้ค้างจ่าย ({src_label})',
                         'TB Net Balance': corporate_tax, 'BS Debit': 0.0, 'BS Credit': corporate_tax, 'PL Debit': 0.0, 'PL Credit': 0.0,
                         'FS Line Item': other_ca_fs_name, 'Missing in TB original': False, 'Missing in GL original': False, 'Status': 'Match'
                     }
@@ -1635,18 +1921,59 @@ def main():
             prior_year_arg = None
             prior_summary = {}
 
+            # --- Prior Year: Option A (Working Paper) ---
             if prior_tb_file:
                 try:
                     prior_tb_file.seek(0)
                     prior_tb_df = parse_tb_working_paper_pdf(prior_tb_file) if prior_tb_file.name.lower().endswith('.pdf') else parse_tb(prior_tb_file)
                     if not prior_tb_df.empty:
                         prior_tb_df['FS Line Item'] = prior_tb_df.apply(auto_map, axis=1)
+                        
+                        def get_prior_fs_value(row):
+                            fs_line = row.get('FS Line Item', '')
+                            if fs_line == 'ไม่จัดประเภท (Unmapped)': return row.get('TB Net Balance', 0.0)
+                            rules = active_items_export.get(fs_line, {})
+                            target_side = rules.get('side', 'bs_debit')
+                            bs_dr = row.get('BS Debit', 0.0)
+                            bs_cr = row.get('BS Credit', 0.0)
+                            pl_dr = row.get('PL Debit', 0.0)
+                            pl_cr = row.get('PL Credit', 0.0)
+                            if bs_dr == 0 and bs_cr == 0 and pl_dr == 0 and pl_cr == 0:
+                                return row.get('TB Net Balance', 0.0)
+                            if target_side == 'bs_debit': return bs_dr - bs_cr
+                            elif target_side == 'bs_credit': return bs_cr - bs_dr
+                            elif target_side == 'pl_debit': return pl_dr - pl_cr
+                            elif target_side == 'pl_credit': return pl_cr - pl_dr
+                            return row.get('TB Net Balance', 0.0)
+                        
+                        prior_tb_df['FS Value'] = prior_tb_df.apply(get_prior_fs_value, axis=1)
                         prior_summary = compute_fs_summary(prior_tb_df)
                         prior_summary.pop('ไม่จัดประเภท (Unmapped)', None)
                         years_data[prior_year_label] = prior_summary
                         prior_year_arg = prior_year_label
-                        st.success(f"✅ Prior year ({prior_year_label}) loaded: {len(prior_tb_df)} accounts")
+                        st.success(f"✅ Prior year ({prior_year_label}) loaded from Working Paper: {len(prior_tb_df)} accounts")
                 except Exception as e: st.warning(f"Could not parse prior year TB: {e}")
+            
+            # --- Prior Year: Option B (FS Excel — direct import) ---
+            if prior_fs_file:
+                try:
+                    prior_fs_file.seek(0)
+                    prior_summary = parse_prior_fs_excel(prior_fs_file)
+                    if prior_summary:
+                        years_data[prior_year_label] = prior_summary
+                        prior_year_arg = prior_year_label
+                        matched_items = [k for k in prior_summary.keys() if prior_summary[k] != 0]
+                        st.success(f"✅ Prior year ({prior_year_label}) imported from FS: {len(matched_items)} line items matched")
+                        with st.expander(f"📋 Prior Year FS Import Detail — {len(prior_summary)} items", expanded=False):
+                            import_data = [{"รายการ": k, "ยอดเงิน": v} for k, v in sorted(prior_summary.items())]
+                            st.dataframe(
+                                pd.DataFrame(import_data), 
+                                use_container_width=True, hide_index=True,
+                                column_config={"ยอดเงิน": st.column_config.NumberColumn(format="%,.2f")}
+                            )
+                    else:
+                        st.warning("⚠️ Could not find any matching FS line items in the uploaded file. Check that the labels match your config.")
+                except Exception as e: st.warning(f"Could not parse prior year FS: {e}")
 
             col_e1, col_e2, col_e3 = st.columns(3)
             with col_e1:
