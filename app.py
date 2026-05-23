@@ -3,26 +3,30 @@ import pandas as pd
 import fitz  # PyMuPDF
 import re
 import io
+import json
 import math
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side, numbers as xl_numbers
 from openpyxl.utils import get_column_letter
 import os
+import copy
 
 # ==========================================
 # 0. UNIFIED CONSTANTS (SINGLE SOURCE OF TRUTH)
 # ==========================================
+# These are the HARDCODED DEFAULTS only.
+# At runtime, the app reads from st.session_state['fs_config'].
+# ==========================================
 # Assets
 L_CASH = "เงินสดและรายการเทียบเท่าเงินสด"
-L_AR = "ลูกหนี้การค้า"
+L_AR = "ลูกหนี้การค้าและลูกหนี้หมุนเวียนอื่น"
 L_LOAN_ASSET = "เงินให้กู้ยืมแก่บุคคลที่เกี่ยวข้องกัน"
 L_OTHER_CA = "สินทรัพย์หมุนเวียนอื่น"
-L_EQUIP = "อุปกรณ์-สุทธิ (Gross)"
+L_EQUIP = "อุปกรณ์-สุทธิ"
 L_DEP = "ค่าเสื่อมราคาสะสม"
 
 # Liabilities
-L_AP = "เจ้าหนี้การค้า"
-L_OTHER_CP = "เจ้าหนี้หมุนเวียนอื่น"
+L_AP_OTHER_CP = "เจ้าหนี้การค้าและเจ้าหนี้หมุนเวียนอื่น"
 L_LOAN_LIAB = "เงินกู้ยืมจากบุคคลที่เกี่ยวข้องกัน"
 L_OTHER_CL = "หนี้สินหมุนเวียนอื่น"
 
@@ -40,28 +44,20 @@ L_TAX = "ภาษีเงินได้"
 
 
 # ==========================================
-# 1. CONFIGURATION DICTIONARIES
+# 1. DEFAULT CONFIGURATION (used as fallback)
 # ==========================================
-FS_LINE_ITEMS = {
-    # Balance Sheet — Assets
+DEFAULT_FS_LINE_ITEMS = {
     L_CASH: {"prefixes": ["111"], "keywords": ["เงินสด", "เงินฝาก"], "side": "bs_debit"},
-    L_AR: {"prefixes": ["113"], "keywords": ["ลูกหนี้"], "side": "bs_debit"},
+    L_AR: {"prefixes": ["113", "1153-01"], "keywords": ["ลูกหนี้"], "side": "bs_debit"},
     L_LOAN_ASSET: {"prefixes": ["121"], "keywords": ["เงินให้กู้ยืม"], "side": "bs_debit"},
     L_OTHER_CA: {"prefixes": ["115", "119", "150"], "keywords": ["ภาษีถูกหัก", "จ่ายล่วงหน้า", "ดอกเบี้ยค้างรับ"], "side": "bs_debit"},
     L_EQUIP: {"prefixes": ["141"], "keywords": ["เครื่องมือ", "เครื่องจักร", "อุปกรณ์สำนักงาน"], "side": "bs_debit"},
     L_DEP: {"prefixes": ["142"], "keywords": ["ค่าเสื่อมราคาสะสม"], "side": "bs_credit"},
-    
-    # Balance Sheet — Liabilities
-    L_AP: {"prefixes": ["212"], "keywords": ["เจ้าหนี้การค้า"], "side": "bs_credit"},
-    L_OTHER_CP: {"prefixes": ["211", "2131"], "keywords": ["เจ้าหนี้", "ค้างจ่าย", "สอบบัญชี", "ทำบัญชี"], "side": "bs_credit"},
+    L_AP_OTHER_CP: {"prefixes": ["211", "212", "2131"], "keywords": ["เจ้าหนี้การค้า", "เจ้าหนี้", "ค้างจ่าย", "สอบบัญชี", "ทำบัญชี"], "side": "bs_credit"},
     L_OTHER_CL: {"prefixes": ["2132", "2137", "2131-04"], "keywords": ["ภาษีหัก", "ภงด", "กรมสรรพากร", "ประกันสังคม", "รอนำส่ง"], "side": "bs_credit"},
     L_LOAN_LIAB: {"prefixes": ["2138"], "keywords": ["เงินกู้ยืม"], "side": "bs_credit"},
-    
-    # Balance Sheet — Equity
     L_SHARE_CAPITAL: {"prefixes": ["31"], "keywords": ["ทุน"], "side": "bs_credit"},
     L_RETAINED_EARNINGS: {"prefixes": ["32"], "keywords": ["กำไร"], "side": "bs_debit"},
-    
-    # P&L — Revenue & Expenses
     L_REV_SERVICE: {"prefixes": ["41"], "keywords": ["รายได้จากการ"], "side": "pl_credit"},
     L_REV_OTHER: {"prefixes": ["42"], "keywords": ["รายได้อื่น", "ดอกเบี้ยรับ"], "side": "pl_credit"},
     L_COST_SERVICE: {"prefixes": ["51", "5200-11"], "keywords": ["ต้นทุน", "ซื้อ", "ค่าจ้าง"], "side": "pl_debit"},
@@ -70,80 +66,264 @@ FS_LINE_ITEMS = {
     L_TAX: {"prefixes": [], "keywords": ["ภาษีเงินได้นิติบุคคล"], "side": "pl_debit"},
 }
 
-FS_BS_STRUCTURE = [
-    ('header', 'สินทรัพย์', None, None),
-    ('header', 'สินทรัพย์หมุนเวียน', None, None),
-    ('item',   L_CASH, 4, L_CASH),
-    ('item',   L_AR, 5, L_AR),
-    ('item',   L_LOAN_ASSET, None, L_LOAN_ASSET),
-    ('item',   L_OTHER_CA, 6, L_OTHER_CA),
-    ('subtotal','รวมสินทรัพย์หมุนเวียน', None, [L_CASH, L_AR, L_LOAN_ASSET, L_OTHER_CA]),
-    ('spacer',  None, None, None),
-    ('header', 'สินทรัพย์ไม่หมุนเวียน', None, None),
-    ('item',   L_EQUIP, None, L_EQUIP),
-    ('item',   L_DEP, None, L_DEP),
-    ('subtotal','อุปกรณ์-สุทธิ', 7, [L_EQUIP, f'-{L_DEP}']),
-    ('subtotal','รวมสินทรัพย์ไม่หมุนเวียน', None, ['อุปกรณ์-สุทธิ']),
-    ('subtotal','รวมสินทรัพย์', None, ['รวมสินทรัพย์หมุนเวียน', 'รวมสินทรัพย์ไม่หมุนเวียน']),
-    ('spacer',  None, None, None),
-    ('header', 'หนี้สินและส่วนของเจ้าของ', None, None),
-    ('header', 'หนี้สินหมุนเวียน', None, None),
-    ('item',   L_AP, None, L_AP),
-    ('item',   L_OTHER_CP, 8, L_OTHER_CP),
-    ('item',   L_LOAN_LIAB, 9, L_LOAN_LIAB),
-    ('item',   L_OTHER_CL, 10, L_OTHER_CL),
-    ('subtotal','รวมหนี้สินหมุนเวียน', None, [L_AP, L_OTHER_CP, L_LOAN_LIAB, L_OTHER_CL]),
-    ('subtotal','รวมหนี้สิน', None, ['รวมหนี้สินหมุนเวียน']),
-    ('spacer',  None, None, None),
-    ('header', 'ส่วนของเจ้าของ', None, None),
-    ('item',   L_SHARE_CAPITAL, None, L_SHARE_CAPITAL),
-    ('item',   L_RETAINED_EARNINGS, None, L_RETAINED_EARNINGS),
-    ('subtotal','รวมส่วนของเจ้าของ', None, [L_SHARE_CAPITAL, L_RETAINED_EARNINGS]),
-    ('subtotal','รวมหนี้สินและส่วนของเจ้าของ', None, ['รวมหนี้สิน', 'รวมส่วนของเจ้าของ']),
+DEFAULT_BS_STRUCTURE = [
+    ["header", "สินทรัพย์", None, None],
+    ["header", "สินทรัพย์หมุนเวียน", None, None],
+    ["item",   L_CASH, 4, L_CASH],
+    ["item",   L_AR, 5, L_AR],
+    ["item",   L_LOAN_ASSET, None, L_LOAN_ASSET],
+    ["item",   L_OTHER_CA, 6, L_OTHER_CA],
+    ["subtotal","รวมสินทรัพย์หมุนเวียน", None, [L_CASH, L_AR, L_LOAN_ASSET, L_OTHER_CA]],
+    ["spacer",  None, None, None],
+    ["header", "สินทรัพย์ไม่หมุนเวียน", None, None],
+    ["item", "อุปกรณ์-สุทธิ", 7, [L_EQUIP, f"-{L_DEP}"]],
+    ["subtotal","รวมสินทรัพย์ไม่หมุนเวียน", None, ["อุปกรณ์-สุทธิ"]],
+    ["subtotal","รวมสินทรัพย์", None, ["รวมสินทรัพย์หมุนเวียน", "รวมสินทรัพย์ไม่หมุนเวียน"]],
+    ["spacer",  None, None, None],
+    ["header", "หนี้สินและส่วนของเจ้าของ", None, None],
+    ["header", "หนี้สินหมุนเวียน", None, None],
+    ["item",   L_AP_OTHER_CP, 8, L_AP_OTHER_CP],
+    ["item",   L_LOAN_LIAB, 9, L_LOAN_LIAB],
+    ["item",   L_OTHER_CL, 10, L_OTHER_CL],
+    ["subtotal","รวมหนี้สินหมุนเวียน", None, [L_AP_OTHER_CP, L_LOAN_LIAB, L_OTHER_CL]],
+    ["subtotal","รวมหนี้สิน", None, ["รวมหนี้สินหมุนเวียน"]],
+    ["spacer",  None, None, None],
+    ["header", "ส่วนของเจ้าของ", None, None],
+    ["item",   L_SHARE_CAPITAL, None, L_SHARE_CAPITAL],
+    ["item",   L_RETAINED_EARNINGS, None, L_RETAINED_EARNINGS],
+    ["subtotal","รวมส่วนของเจ้าของ", None, [L_SHARE_CAPITAL, L_RETAINED_EARNINGS]],
+    ["subtotal","รวมหนี้สินและส่วนของเจ้าของ", None, ["รวมหนี้สิน", "รวมส่วนของเจ้าของ"]],
 ]
 
-FS_PL_STRUCTURE = [
-    ('header',  'รายได้', None, None),
-    ('item',    L_REV_SERVICE, None, L_REV_SERVICE),
-    ('item',    L_REV_OTHER, None, L_REV_OTHER),
-    ('subtotal','รวมรายได้', None, [L_REV_SERVICE, L_REV_OTHER]),
-    ('spacer',  None, None, None),
-    ('header',  'ค่าใช้จ่าย', None, None),
-    ('item',    L_COST_SERVICE, None, L_COST_SERVICE),
-    ('item',    L_SGNA, None, L_SGNA),
-    ('subtotal','รวมค่าใช้จ่าย', None, [L_COST_SERVICE, L_SGNA]),
-    ('spacer',  None, None, None),
-    ('subtotal','กำไร(ขาดทุน)ก่อนต้นทุนทางการเงินและภาษีเงินได้', None, ['รวมรายได้', '-รวมค่าใช้จ่าย']),
-    ('item',    L_FINANCE_COST, None, L_FINANCE_COST),
-    ('subtotal','กำไร(ขาดทุน)ก่อนภาษีเงินได้', None, ['กำไร(ขาดทุน)ก่อนต้นทุนทางการเงินและภาษีเงินได้', f'-{L_FINANCE_COST}']),
-    ('item',    L_TAX, None, L_TAX),
-    ('subtotal','กำไร(ขาดทุน)สุทธิ', None, ['กำไร(ขาดทุน)ก่อนภาษีเงินได้', f'-{L_TAX}']),
+DEFAULT_PL_STRUCTURE = [
+    ["header",  "รายได้", None, None],
+    ["item",    L_REV_SERVICE, None, L_REV_SERVICE],
+    ["item",    L_REV_OTHER, None, L_REV_OTHER],
+    ["subtotal","รวมรายได้", None, [L_REV_SERVICE, L_REV_OTHER]],
+    ["spacer",  None, None, None],
+    ["header",  "ค่าใช้จ่าย", None, None],
+    ["item",    L_COST_SERVICE, None, L_COST_SERVICE],
+    ["item",    L_SGNA, None, L_SGNA],
+    ["subtotal","รวมค่าใช้จ่าย", None, [L_COST_SERVICE, L_SGNA]],
+    ["spacer",  None, None, None],
+    ["subtotal","กำไร(ขาดทุน)ก่อนต้นทุนทางการเงินและภาษีเงินได้", None, ["รวมรายได้", "-รวมค่าใช้จ่าย"]],
+    ["item",    L_FINANCE_COST, None, L_FINANCE_COST],
+    ["subtotal","กำไร(ขาดทุน)ก่อนภาษีเงินได้", None, ["กำไร(ขาดทุน)ก่อนต้นทุนทางการเงินและภาษีเงินได้", f"-{L_FINANCE_COST}"]],
+    ["item",    L_TAX, None, L_TAX],
+    ["subtotal","กำไร(ขาดทุน)สุทธิ", None, ["กำไร(ขาดทุน)ก่อนภาษีเงินได้", f"-{L_TAX}"]],
 ]
 
-# ==========================================
-# SANITIZE CONFIGURATION (PREVENT WHITESPACE BUGS)
-# ==========================================
-FS_LINE_ITEMS = {k.strip(): v for k, v in FS_LINE_ITEMS.items()}
+DEFAULT_EQ_STRUCTURE = {
+    "columns": ["ทุนที่ออกและเรียกชำระแล้ว", "กำไร(ขาดทุน)สะสม", "รวมส่วนของเจ้าของ"],
+    "rows": [
+        {"type": "opening", "label_template": "ยอด ณ วันต้นปี {year}", "values": {"capital": "open_capital", "retained": "open_retained", "total": "auto_sum"}},
+        {"type": "movement", "label": "ออกหุ้นและชำระเงิน", "values": {"capital": "issued_capital", "retained": 0, "total": "auto_sum"}},
+        {"type": "movement", "label": "กำไร(ขาดทุน)สุทธิสำหรับปี", "values": {"capital": 0, "retained": "net_profit", "total": "auto_sum"}},
+        {"type": "closing", "label_template": "ยอดคงเหลือ ณ วันที่ 31 ธันวาคม {year}", "values": {"capital": "close_capital", "retained": "close_retained", "total": "auto_sum"}}
+    ],
+    "sheet_title": "งบการเปลี่ยนแปลงส่วนของเจ้าของ"
+}
 
-cleaned_bs = []
-for row in FS_BS_STRUCTURE:
-    r_type, r_label, r_note, r_key = row
-    clean_label = r_label.strip() if isinstance(r_label, str) else r_label
-    if isinstance(r_key, list): clean_key = [k.strip() for k in r_key]
-    elif isinstance(r_key, str): clean_key = r_key.strip()
-    else: clean_key = r_key
-    cleaned_bs.append((r_type, clean_label, r_note, clean_key))
-FS_BS_STRUCTURE = cleaned_bs
 
-cleaned_pl = []
-for row in FS_PL_STRUCTURE:
-    r_type, r_label, r_note, r_key = row
-    clean_label = r_label.strip() if isinstance(r_label, str) else r_label
-    if isinstance(r_key, list): clean_key = [k.strip() for k in r_key]
-    elif isinstance(r_key, str): clean_key = r_key.strip()
-    else: clean_key = r_key
-    cleaned_pl.append((r_type, clean_label, r_note, clean_key))
-FS_PL_STRUCTURE = cleaned_pl
+# ==========================================
+# 2. CONFIG MANAGER — Load / Save / Deploy
+# ==========================================
+CONFIG_FILENAME = "fs_config.json"
+
+def _get_config_path():
+    """Return the path to the deployed config file next to app.py."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), CONFIG_FILENAME)
+
+def _build_default_config():
+    """Build the full default config dict from hardcoded Python constants."""
+    return {
+        "fs_line_items": copy.deepcopy(DEFAULT_FS_LINE_ITEMS),
+        "bs_structure": copy.deepcopy(DEFAULT_BS_STRUCTURE),
+        "pl_structure": copy.deepcopy(DEFAULT_PL_STRUCTURE),
+        "eq_structure": copy.deepcopy(DEFAULT_EQ_STRUCTURE),
+    }
+
+def _sanitize_structure(structure):
+    """Strip whitespace from all string labels/keys in a structure list."""
+    cleaned = []
+    for row in structure:
+        r_type, r_label, r_note, r_key = row
+        clean_label = r_label.strip() if isinstance(r_label, str) else r_label
+        if isinstance(r_key, list):
+            clean_key = [k.strip() for k in r_key]
+        elif isinstance(r_key, str):
+            clean_key = r_key.strip()
+        else:
+            clean_key = r_key
+        cleaned.append((r_type, clean_label, r_note, clean_key))
+    return cleaned
+
+def _load_deployed_config():
+    """Try to load config from fs_config.json on disk. Returns None if not found."""
+    config_path = _get_config_path()
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return None
+    return None
+
+def _save_deployed_config(config):
+    """Write config to fs_config.json on disk (Deploy)."""
+    config_path = _get_config_path()
+    with open(config_path, 'w', encoding='utf-8') as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+
+def get_active_config():
+    """Get the active configuration. Single source of truth: fs_config.json file.
+    If the file doesn't exist, create it from hardcoded defaults.
+    Session state is a cache of the file contents."""
+    if 'fs_config' not in st.session_state:
+        deployed = _load_deployed_config()
+        if deployed:
+            st.session_state['fs_config'] = deployed
+            st.session_state['_config_source'] = 'deployed'
+        else:
+            # First run: create the config file from defaults
+            default_cfg = _build_default_config()
+            _save_deployed_config(default_cfg)
+            st.session_state['fs_config'] = default_cfg
+            st.session_state['_config_source'] = 'default (auto-created)'
+    return st.session_state['fs_config']
+
+def get_fs_line_items():
+    """Shortcut to get the active FS_LINE_ITEMS dict."""
+    cfg = get_active_config()
+    return {k.strip(): v for k, v in cfg.get('fs_line_items', DEFAULT_FS_LINE_ITEMS).items()}
+
+def get_bs_structure():
+    """Shortcut to get the active BS structure as list of tuples."""
+    cfg = get_active_config()
+    raw = cfg.get('bs_structure', DEFAULT_BS_STRUCTURE)
+    return _sanitize_structure(raw)
+
+def get_pl_structure():
+    """Shortcut to get the active PL structure as list of tuples."""
+    cfg = get_active_config()
+    raw = cfg.get('pl_structure', DEFAULT_PL_STRUCTURE)
+    return _sanitize_structure(raw)
+
+def get_eq_structure():
+    """Shortcut to get the active Equity structure."""
+    cfg = get_active_config()
+    return cfg.get('eq_structure', copy.deepcopy(DEFAULT_EQ_STRUCTURE))
+
+def _validate_config(config):
+    """Validate config and return list of (severity, message) tuples."""
+    issues = []
+    
+    # Check JSON structure
+    if not isinstance(config, dict):
+        return [("error", "Config root must be a JSON object (dict)")]
+    
+    fs_items = config.get('fs_line_items', {})
+    if not isinstance(fs_items, dict):
+        issues.append(("error", "fs_line_items must be a JSON object"))
+        return issues
+    
+    valid_sides = {'bs_debit', 'bs_credit', 'pl_debit', 'pl_credit'}
+    
+    # Validate fs_line_items
+    for name, rules in fs_items.items():
+        if not isinstance(rules, dict):
+            issues.append(("error", f"'{name}': value must be an object with prefixes/keywords/side"))
+            continue
+        if 'side' not in rules:
+            issues.append(("warning", f"'{name}': missing 'side' field"))
+        elif rules['side'] not in valid_sides:
+            issues.append(("warning", f"'{name}': side='{rules['side']}' is not one of {valid_sides}"))
+        if 'prefixes' not in rules:
+            issues.append(("warning", f"'{name}': missing 'prefixes' field"))
+        if 'keywords' not in rules:
+            issues.append(("warning", f"'{name}': missing 'keywords' field"))
+    
+    # Validate BS structure references
+    bs_struct = config.get('bs_structure', [])
+    if isinstance(bs_struct, list):
+        computed_labels = set()
+        for row in bs_struct:
+            if len(row) < 4:
+                issues.append(("error", f"BS structure row too short: {row}"))
+                continue
+            r_type, r_label, r_note, r_key = row[0], row[1], row[2], row[3]
+            if r_type == 'item' and r_key:
+                if isinstance(r_key, list):
+                    for ref in r_key:
+                        clean_ref = ref.lstrip('-')
+                        if clean_ref not in fs_items:
+                            issues.append(("warning", f"BS item '{r_label}' references '{clean_ref}' which is NOT in fs_line_items"))
+                elif isinstance(r_key, str):
+                    if r_key not in fs_items:
+                        issues.append(("warning", f"BS item '{r_label}' references '{r_key}' which is NOT in fs_line_items"))
+                computed_labels.add(r_label)
+            elif r_type == 'subtotal':
+                computed_labels.add(r_label)
+            elif r_type == 'header' or r_type == 'spacer':
+                pass
+    
+    # Validate PL structure references
+    pl_struct = config.get('pl_structure', [])
+    if isinstance(pl_struct, list):
+        for row in pl_struct:
+            if len(row) < 4:
+                issues.append(("error", f"PL structure row too short: {row}"))
+                continue
+            r_type, r_label, r_note, r_key = row[0], row[1], row[2], row[3]
+            if r_type == 'item' and r_key:
+                if isinstance(r_key, list):
+                    for ref in r_key:
+                        clean_ref = ref.lstrip('-')
+                        if clean_ref not in fs_items:
+                            issues.append(("warning", f"PL item '{r_label}' references '{clean_ref}' which is NOT in fs_line_items"))
+                elif isinstance(r_key, str):
+                    if r_key not in fs_items:
+                        issues.append(("warning", f"PL item '{r_label}' references '{r_key}' which is NOT in fs_line_items"))
+    
+    # Validate EQ structure
+    eq_struct = config.get('eq_structure')
+    if eq_struct is not None:
+        if not isinstance(eq_struct, dict):
+            issues.append(("error", "eq_structure must be a JSON object"))
+        else:
+            if 'columns' not in eq_struct:
+                issues.append(("warning", "eq_structure: missing 'columns' field"))
+            if 'rows' not in eq_struct:
+                issues.append(("warning", "eq_structure: missing 'rows' field"))
+    
+    if not issues:
+        issues.append(("success", "All validations passed ✅"))
+    
+    return issues
+
+
+# ==========================================
+# LEGEND DATA
+# ==========================================
+LEGEND_DATA = {
+    "FS": "Financial Statements — งบการเงิน (รวมทุกงบ: งบดุล, งบกำไรขาดทุน, งบส่วนของเจ้าของ)",
+    "BS": "Balance Sheet — งบฐานะการเงิน (งบดุล): แสดงสินทรัพย์ หนี้สิน ส่วนของเจ้าของ ณ วันสิ้นงวด",
+    "PL": "Profit & Loss / Income Statement — งบกำไรขาดทุน: แสดงรายได้ ค่าใช้จ่าย กำไร(ขาดทุน)สุทธิ",
+    "EQ": "Statement of Changes in Equity — งบการเปลี่ยนแปลงส่วนของเจ้าของ",
+    "GL": "General Ledger — บัญชีแยกประเภท: รายละเอียดธุรกรรมของแต่ละบัญชี",
+    "TB": "Trial Balance — งบทดลอง: สรุปยอดเดบิต-เครดิตของทุกบัญชี",
+    "BF": "Brought Forward — ยอดยกมา: ยอดคงเหลือต้นงวด",
+    "bs_debit": "สินทรัพย์ (ยอดปกติอยู่ฝั่ง Debit) → FS Value = BS Debit − BS Credit",
+    "bs_credit": "หนี้สิน/ทุน (ยอดปกติอยู่ฝั่ง Credit) → FS Value = BS Credit − BS Debit",
+    "pl_debit": "ค่าใช้จ่าย (ยอดปกติอยู่ฝั่ง Debit) → FS Value = PL Debit − PL Credit",
+    "pl_credit": "รายได้ (ยอดปกติอยู่ฝั่ง Credit) → FS Value = PL Credit − PL Debit",
+    "header": "แถวหัวข้อ — แสดงชื่อหมวดเท่านั้น ไม่มีตัวเลข",
+    "item": "แถวรายการ — key เป็น string (ดึงยอดจาก fs_line_items) หรือ list (คำนวณจากสูตร เช่น [\"อุปกรณ์\", \"-ค่าเสื่อมราคาสะสม\"])",
+    "subtotal": "แถวรวมย่อย — คำนวณจาก array ของ key (ช่องที่ 4), ใส่ - หน้าชื่อเพื่อหัก",
+    "spacer": "แถวว่าง — เว้นบรรทัด",
+    "prefixes": "รหัสบัญชีนำหน้า เช่น '111' จะ match กับ 1110-01, 1111-02 ฯลฯ (ลำดับความสำคัญสูงกว่า keywords)",
+    "keywords": "คำค้นหาในชื่อบัญชี เช่น 'เงินสด' (ใช้เมื่อไม่ match prefix ใดเลย)",
+}
 
 
 # ==========================================
@@ -153,7 +333,20 @@ def build_fs_from_mapping(fs_mapping: dict, structure: list) -> dict:
     computed = {}
     for row_type, label, note, key in structure:
         if row_type == 'item':
-            computed[label] = fs_mapping.get(key, 0.0) if key else 0.0
+            if isinstance(key, list):
+                # List key: compute from formula (lookup from both computed and fs_mapping)
+                total = 0.0
+                for k in key:
+                    if k.startswith('-'):
+                        ref = k[1:]
+                        total -= computed.get(ref, fs_mapping.get(ref, 0.0))
+                    else:
+                        total += computed.get(k, fs_mapping.get(k, 0.0))
+                computed[label] = total
+            elif key:
+                computed[label] = fs_mapping.get(key, 0.0)
+            else:
+                computed[label] = 0.0
         elif row_type == 'subtotal' and isinstance(key, list):
             total = 0.0
             for k in key:
@@ -181,6 +374,17 @@ def _write_fs_sheet(ws, structure, years_computed, year_labels, company_name, st
     NUM_FMT = '#,##0.00;[Red]-#,##0.00'
     HDR_FILL = 'DDEEFF'
     SUBTOT_FILL = 'F0F4F8'
+
+    # Resolve the share capital and retained earnings labels dynamically from active config
+    active_line_items = get_fs_line_items()
+    share_capital_label = None
+    retained_earnings_label = None
+    for name, rules in active_line_items.items():
+        if rules.get('side') == 'bs_credit' and any(kw in name for kw in ['ทุน', 'หุ้น', 'capital']):
+            if 'กู้' not in name and 'เจ้าหนี้' not in name:
+                share_capital_label = name
+        if 'กำไร' in name and 'สะสม' in name:
+            retained_earnings_label = name
 
     ws.column_dimensions['A'].width = 42
     ws.column_dimensions['B'].width = 10
@@ -213,30 +417,32 @@ def _write_fs_sheet(ws, structure, years_computed, year_labels, company_name, st
             row += 1
             continue
 
+        # ZERO-ROW SUPPRESSION: Skip item rows where ALL years have value 0
+        if row_type == 'item' and key:
+            all_zero = all(
+                (years_computed.get(yl, {}).get(label, 0.0) or 0.0) == 0.0
+                for yl in year_labels
+            )
+            if all_zero:
+                continue
+
         is_header = row_type == 'header'
         is_subtotal = row_type == 'subtotal'
         indent = 0 if is_header else (1 if is_subtotal else 2)
 
-        # ==========================================
         # CUSTOM EQUITY FORMATTING (TFRS Standard)
-        # ==========================================
-        if key == L_SHARE_CAPITAL and eq_details:
-            # 1. ทุนเรือนหุ้น (Header)
+        if share_capital_label and key == share_capital_label and eq_details:
             c = ws.cell(row, 1, label); _apply_cell_style(c, bold=True, indent=indent); row += 1
-            # 2. ทุนจดทะเบียน
             c = ws.cell(row, 1, "ทุนจดทะเบียน"); _apply_cell_style(c, indent=indent+1); row += 1
-            # 3. Detail (Memo line)
             c = ws.cell(row, 1, f"หุ้นสามัญ {eq_details['reg_shares']:,} หุ้น มูลค่าหุ้นละ {eq_details['reg_par']:,.2f} บาท")
             _apply_cell_style(c, indent=indent+2)
             for i, lbl in enumerate(year_labels):
                 val = eq_details['reg_shares'] * eq_details['reg_par']
                 vc = ws.cell(row, 3 + i * 2, val)
                 _apply_cell_style(vc, number_format=NUM_FMT, align='right')
-                vc.border = Border(bottom=Side(style='double')) # Double underline memo
+                vc.border = Border(bottom=Side(style='double'))
             row += 1
-            # 4. ทุนที่ออกและเรียกชำระแล้ว
             c = ws.cell(row, 1, "ทุนที่ออกและเรียกชำระแล้ว"); _apply_cell_style(c, indent=indent+1); row += 1
-            # 5. Detail (Actual Value)
             c = ws.cell(row, 1, f"หุ้นสามัญ {eq_details['paid_shares']:,} หุ้น มูลค่าหุ้นละ {eq_details['paid_par']:,.2f} บาท")
             _apply_cell_style(c, indent=indent+2)
             for i, lbl in enumerate(year_labels):
@@ -246,10 +452,8 @@ def _write_fs_sheet(ws, structure, years_computed, year_labels, company_name, st
             row += 1
             continue
             
-        if key == L_RETAINED_EARNINGS and eq_details:
-            # 1. กำไร(ขาดทุน)สะสม (Header)
+        if retained_earnings_label and key == retained_earnings_label and eq_details:
             c = ws.cell(row, 1, label); _apply_cell_style(c, bold=True, indent=indent); row += 1
-            # 2. ยังไม่ได้จัดสรร
             c = ws.cell(row, 1, "ยังไม่ได้จัดสรร"); _apply_cell_style(c, indent=indent+1)
             for i, lbl in enumerate(year_labels):
                 val = years_computed[lbl].get(label)
@@ -258,7 +462,7 @@ def _write_fs_sheet(ws, structure, years_computed, year_labels, company_name, st
             row += 1
             continue
 
-        # --- Standard Writing Logic ---
+        # Standard Writing Logic
         c = ws.cell(row, 1, label)
         _apply_cell_style(c, bold=(is_header or is_subtotal), indent=indent, bg=HDR_FILL if is_header else (SUBTOT_FILL if is_subtotal else None))
 
@@ -284,6 +488,21 @@ def generate_fs_excel(years_data: dict, company_name: str, current_year: str, pr
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
 
+    # Use active config
+    active_bs = get_bs_structure()
+    active_pl = get_pl_structure()
+    active_items = get_fs_line_items()
+    
+    # Find the share capital and retained earnings labels dynamically
+    share_capital_label = None
+    retained_earnings_label = None
+    for name, rules in active_items.items():
+        if rules.get('side') == 'bs_credit' and any(kw in name for kw in ['ทุน', 'หุ้น', 'capital']):
+            if 'กู้' not in name and 'เจ้าหนี้' not in name:
+                share_capital_label = name
+        if 'กำไร' in name and 'สะสม' in name:
+            retained_earnings_label = name
+
     year_labels = [current_year]
     if prior_year and prior_year in years_data: year_labels.append(prior_year)
 
@@ -291,34 +510,38 @@ def generate_fs_excel(years_data: dict, company_name: str, current_year: str, pr
     pl_computed = {} 
     for yl in year_labels:
         mapping = years_data.get(yl, {})
-        pl_vals = build_fs_from_mapping(mapping, FS_PL_STRUCTURE)
+        pl_vals = build_fs_from_mapping(mapping, active_pl)
         net_profit = pl_vals.get('กำไร(ขาดทุน)สุทธิ', 0.0) or 0.0
         mapping_bs = dict(mapping)
-        mapping_bs[L_RETAINED_EARNINGS] = mapping.get(L_RETAINED_EARNINGS, 0.0) + net_profit
+        if retained_earnings_label:
+            mapping_bs[retained_earnings_label] = mapping.get(retained_earnings_label, 0.0) + net_profit
         
-        # USE PAID-UP CAPITAL FOR THE MATH!
-        if eq_details:
-            mapping_bs[L_SHARE_CAPITAL] = eq_details['paid_shares'] * eq_details['paid_par']
+        if eq_details and share_capital_label:
+            mapping_bs[share_capital_label] = eq_details['paid_shares'] * eq_details['paid_par']
             
-        bs_computed[yl] = build_fs_from_mapping(mapping_bs, FS_BS_STRUCTURE)
+        bs_computed[yl] = build_fs_from_mapping(mapping_bs, active_bs)
         pl_computed[yl] = pl_vals
 
     ws_bs = wb.create_sheet('งบฐานะการเงิน')
-    _write_fs_sheet(ws_bs, FS_BS_STRUCTURE, bs_computed, year_labels, company_name, 'งบฐานะการเงิน', f'ณ วันที่ 31 ธันวาคม {current_year}', eq_details)
+    _write_fs_sheet(ws_bs, active_bs, bs_computed, year_labels, company_name, 'งบฐานะการเงิน', f'ณ วันที่ 31 ธันวาคม {current_year}', eq_details)
 
     ws_pl = wb.create_sheet('งบกำไรขาดทุน')
-    _write_fs_sheet(ws_pl, FS_PL_STRUCTURE, pl_computed, year_labels, company_name, 'งบกำไรขาดทุน', f'สำหรับปีสิ้นสุดวันที่ 31 ธันวาคม {current_year}', None)
+    _write_fs_sheet(ws_pl, active_pl, pl_computed, year_labels, company_name, 'งบกำไรขาดทุน', f'สำหรับปีสิ้นสุดวันที่ 31 ธันวาคม {current_year}', None)
 
     if eq_details:
-        _write_equity_sheet(wb, company_name, current_year, prior_year, bs_computed, pl_computed, year_labels, eq_details['reg_shares']*eq_details['reg_par'], eq_details['paid_shares'], eq_details['paid_par'])
+        _write_equity_sheet(wb, company_name, current_year, prior_year, bs_computed, pl_computed, year_labels, 
+                            eq_details['reg_shares']*eq_details['reg_par'], eq_details['paid_shares'], eq_details['paid_par'],
+                            share_capital_label, retained_earnings_label)
 
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf.getvalue()
 
-def _write_equity_sheet(wb, company_name, current_year, prior_year, bs_computed, pl_computed, year_labels, registered_capital, shares, par_value):
-    ws = wb.create_sheet('งบส่วนของเจ้าของ')
+def _write_equity_sheet(wb, company_name, current_year, prior_year, bs_computed, pl_computed, year_labels, 
+                        registered_capital, shares, par_value, share_capital_label, retained_earnings_label):
+    eq_cfg = get_eq_structure()
+    ws = wb.create_sheet(eq_cfg.get('sheet_title', 'งบส่วนของเจ้าของ'))
     ws.column_dimensions['A'].width = 46
     for col in ['B', 'C', 'E', 'G']: ws.column_dimensions[col].width = 2
     for col in ['D', 'F', 'H']: ws.column_dimensions[col].width = 18
@@ -334,23 +557,30 @@ def _write_equity_sheet(wb, company_name, current_year, prior_year, bs_computed,
 
     r = 1
     wc(r, 1, company_name, bold=True); r += 1
-    wc(r, 1, 'งบการเปลี่ยนแปลงส่วนของเจ้าของ', bold=True); r += 1
+    wc(r, 1, eq_cfg.get('sheet_title', 'งบการเปลี่ยนแปลงส่วนของเจ้าของ'), bold=True); r += 1
     wc(r, 1, f'สำหรับปีสิ้นสุดวันที่ 31 ธันวาคม {current_year}'); r += 1
     wc(r, 1, 'หน่วย : บาท', italic=True); r += 1
     r += 1
 
-    wc(r, 4, 'ทุนที่ออกและ', bold=True, align='center'); wc(r, 6, 'กำไร(ขาดทุน)', bold=True, align='center'); wc(r, 8, 'รวมส่วนของ', bold=True, align='center'); r += 1
-    wc(r, 4, 'เรียกชำระแล้ว', bold=True, align='center'); wc(r, 6, 'สะสม', bold=True, align='center'); wc(r, 8, 'เจ้าของ', bold=True, align='center'); r += 1
+    # Column headers from config
+    cols = eq_cfg.get('columns', ["ทุนที่ออกและเรียกชำระแล้ว", "กำไร(ขาดทุน)สะสม", "รวมส่วนของเจ้าของ"])
+    col_positions = [4, 6, 8]
+    for ci, col_label in enumerate(cols):
+        parts = col_label.split('\n') if '\n' in col_label else [col_label]
+        for pi, part in enumerate(parts):
+            wc(r + pi, col_positions[ci], part, bold=True, align='center')
+    r += max(len(col_label.split('\n')) if '\n' in col_label else 1 for col_label in cols)
 
     def get_pl(yl, key): return pl_computed.get(yl, {}).get(key, 0.0) or 0.0
     def get_bs(yl, key): return bs_computed.get(yl, {}).get(key, 0.0) or 0.0
 
-    # FIX: Calculate actual paid-up capital
     paid_up_capital = shares * par_value
+    _scl = share_capital_label or L_SHARE_CAPITAL
+    _rel = retained_earnings_label or L_RETAINED_EARNINGS
 
     if prior_year and prior_year in bs_computed:
-        prior_capital = get_bs(prior_year, L_SHARE_CAPITAL) or paid_up_capital
-        prior_retained = get_bs(prior_year, L_RETAINED_EARNINGS) - get_pl(prior_year, 'กำไร(ขาดทุน)สุทธิ')
+        prior_capital = get_bs(prior_year, _scl) or paid_up_capital
+        prior_retained = get_bs(prior_year, _rel) - get_pl(prior_year, 'กำไร(ขาดทุน)สุทธิ')
         prior_net = get_pl(prior_year, 'กำไร(ขาดทุน)สุทธิ')
 
         wc(r, 1, f'ยอด ณ วันต้นปี {prior_year}', bold=True)
@@ -370,46 +600,71 @@ def _write_equity_sheet(wb, company_name, current_year, prior_year, bs_computed,
         cur_capital_open = prior_end_cap
         cur_retained_open = prior_end_ret
     else:
-        # FIX: Ensure we use the paid_up_capital here, NOT the registered_capital
         cur_capital_open = paid_up_capital
         cur_retained_open = 0
 
     cur_net = get_pl(current_year, 'กำไร(ขาดทุน)สุทธิ')
-    cur_capital = get_bs(current_year, L_SHARE_CAPITAL) or paid_up_capital
+    cur_capital = get_bs(current_year, _scl) or paid_up_capital
 
-    wc(r, 1, f'ยอด ณ วันต้นปี {current_year}', bold=True)
-    wc(r, 4, cur_capital_open, num=True, align='right')
-    wc(r, 6, cur_retained_open, num=True, align='right')
-    wc(r, 8, cur_capital_open + cur_retained_open, num=True, align='right'); r += 1
-    wc(r, 1, 'กำไร(ขาดทุน)สุทธิสำหรับปี')
-    wc(r, 6, cur_net, num=True, align='right')
-    wc(r, 8, cur_net, num=True, align='right'); r += 1
-    cur_end_ret = cur_retained_open + cur_net
-    wc(r, 1, f'ยอดคงเหลือ ณ สิ้นปี {current_year}', bold=True)
-    wc(r, 4, cur_capital, num=True, align='right')
-    wc(r, 6, cur_end_ret, num=True, align='right')
-    wc(r, 8, cur_capital + cur_end_ret, num=True, align='right'); r += 1
+    # Write rows from eq_structure config
+    eq_rows = eq_cfg.get('rows', DEFAULT_EQ_STRUCTURE['rows'])
+    for eq_row in eq_rows:
+        row_type = eq_row.get('type', 'movement')
+        label_tmpl = eq_row.get('label_template', eq_row.get('label', ''))
+        label = label_tmpl.replace('{year}', current_year) if '{year}' in label_tmpl else label_tmpl
+        
+        is_bold = row_type in ('opening', 'closing')
+        wc(r, 1, label, bold=is_bold)
+        
+        vals = eq_row.get('values', {})
+        
+        # Resolve capital value
+        cap_val = vals.get('capital', 0)
+        if cap_val == 'open_capital': cap_val = cur_capital_open
+        elif cap_val == 'close_capital': cap_val = cur_capital
+        elif cap_val == 'issued_capital': cap_val = cur_capital - cur_capital_open
+        elif isinstance(cap_val, str): cap_val = 0
+        
+        # Resolve retained value
+        ret_val = vals.get('retained', 0)
+        if ret_val == 'open_retained': ret_val = cur_retained_open
+        elif ret_val == 'close_retained': ret_val = cur_retained_open + cur_net
+        elif ret_val == 'net_profit': ret_val = cur_net
+        elif isinstance(ret_val, str): ret_val = 0
+        
+        # Total
+        total_val = vals.get('total', 0)
+        if total_val == 'auto_sum': total_val = cap_val + ret_val
+        
+        if cap_val != 0: wc(r, 4, cap_val, num=True, align='right')
+        if ret_val != 0: wc(r, 6, ret_val, num=True, align='right')
+        wc(r, 8, total_val, num=True, align='right')
+        r += 1
+
     r += 1
     wc(r, 1, 'หมายเหตุประกอบงบการเงินเป็นส่วนหนึ่งของงบการเงินนี้', italic=True)
+
     
 # ==========================================
 # PARSERS
 # ==========================================
 def auto_map(row):
+    """Map a TB row to an FS line item using active config."""
+    active_items = get_fs_line_items()
     acc_id = str(row.get('Account ID', '')).strip()
     acc_name = str(row.get('Account Name', '')).strip()
     
     matches = []
-    for fs_line, rules in FS_LINE_ITEMS.items():
-        for prefix in rules["prefixes"]:
+    for fs_line, rules in active_items.items():
+        for prefix in rules.get("prefixes", []):
             if acc_id.startswith(prefix):
                 matches.append((len(prefix), fs_line))
     if matches:
         matches.sort(key=lambda x: x[0], reverse=True)
         return matches[0][1]
         
-    for fs_line, rules in FS_LINE_ITEMS.items():
-        for keyword in rules["keywords"]:
+    for fs_line, rules in active_items.items():
+        for keyword in rules.get("keywords", []):
             if keyword in acc_name:
                 return fs_line
     return "ไม่จัดประเภท (Unmapped)"
@@ -418,6 +673,7 @@ def parse_tb_pdf(pdf_file):
     doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
     text = ""
     for page in doc: text += page.get_text()
+    text = _clean_thai_pdf_text(text)  # Fix corrupted Thai font characters
     lines = text.split('\n')
     tb_bf_data = []
     for line in lines:
@@ -542,6 +798,7 @@ def parse_gl(pdf_file):
     doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
     text = ""
     for page in doc: text += page.get_text()
+    text = _clean_thai_pdf_text(text)  # Fix corrupted Thai font characters (PUA → standard Unicode)
     lines = text.split('\n')
     
     extracted_company = ""
@@ -549,7 +806,7 @@ def parse_gl(pdf_file):
     for i in range(min(10, len(lines))):
         line = lines[i].strip()
         if "บริษัท" in line and not extracted_company:
-            match_comp = re.split(r'\s{3,}|\t|หน้า|หนา', line)
+            match_comp = re.split(r'\s{3,}|\t|หน้า|หนา', line)
             extracted_company = match_comp[0].strip()
         if "วันที่จาก" in line and not extracted_year:
             match_yr = re.search(r'(25\d{2})', line)
@@ -568,10 +825,10 @@ def parse_gl(pdf_file):
             
             if not existing:
                 acc_name_match = re.match(r'^([^(\s]+(?:\s[^(\s]+)*)', rest_of_line)
-                gl_acc_name = acc_name_match.group(1).strip() if acc_name_match else "Unknown"
+                gl_acc_name = _clean_thai_pdf_text(acc_name_match.group(1).strip()) if acc_name_match else "Unknown"
                 
                 bf_val = 0.0
-                bf_match = re.search(r'\s+((?:\()?[\d,]+\.\d{2}(?:\))?)$', rest_of_line)
+                bf_match = re.search(r'\s+((?:\()?\s*[\d,]+\.\d{2}(?:\))?)$', rest_of_line)
                 if bf_match:
                     bf_str = bf_match.group(1)
                     bf_val = float(bf_str.replace('(', '').replace(')', '').replace(',', ''))
@@ -599,6 +856,256 @@ def parse_gl(pdf_file):
                     
     return pd.DataFrame(gl_data), extracted_company, extracted_year
 
+
+# ==========================================
+# CONFIGURATION TAB UI
+# ==========================================
+def render_config_tab():
+    """Render the Configuration Manager tab.
+    
+    Flow:
+    - App always reads config from fs_config.json (created from defaults if missing)
+    - User edits JSON in text areas
+    - User clicks "🚀 Deploy & Apply" → validate → save to file → activate in session
+    - "Load from File" pre-fills editors only (user must still Deploy)
+    - "Reset Default" overwrites file with defaults and activates immediately
+    - "Export Config" downloads current config as backup
+    """
+    st.write("### ⚙️ FS Configuration Manager")
+    
+    active_cfg = get_active_config()
+    config_source = st.session_state.get('_config_source', 'unknown')
+    
+    st.caption(f"📍 Config source: **{config_source}** — file: `{_get_config_path()}`")
+    
+    # ── Legend ──
+    with st.expander("📖 Legend — คำอธิบายคำย่อและโครงสร้าง (คลิกเพื่อเปิด/ปิด)", expanded=False):
+        col_l1, col_l2 = st.columns(2)
+        with col_l1:
+            st.markdown("##### 📊 Financial Statement Abbreviations")
+            for key in ["FS", "BS", "PL", "EQ", "GL", "TB", "BF"]:
+                st.markdown(f"- **`{key}`** — {LEGEND_DATA[key]}")
+        with col_l2:
+            st.markdown("##### 🔧 Config Field Reference")
+            for key in ["bs_debit", "bs_credit", "pl_debit", "pl_credit"]:
+                st.markdown(f"- **`{key}`** — {LEGEND_DATA[key]}")
+            st.markdown("---")
+            st.markdown("##### 📐 Structure Row Types")
+            for key in ["header", "item", "subtotal", "spacer", "prefixes", "keywords"]:
+                st.markdown(f"- **`{key}`** — {LEGEND_DATA[key]}")
+    
+    st.write("---")
+    
+    # ==========================================
+    # JSON EDITORS — 4 sections
+    # ==========================================
+    
+    def json_editor(label, session_key, default_value, height=400, help_text=""):
+        """Render a JSON text area editor. Returns the current text."""
+        st.markdown(f"##### {label}")
+        if help_text:
+            st.caption(help_text)
+        
+        # Initialize from active config on first load
+        if session_key not in st.session_state:
+            st.session_state[session_key] = json.dumps(default_value, ensure_ascii=False, indent=2)
+        
+        edited_text = st.text_area(
+            f"JSON Editor: {label}",
+            value=st.session_state[session_key],
+            height=height,
+            key=f"_ta_{session_key}",
+            label_visibility="collapsed"
+        )
+        st.session_state[session_key] = edited_text
+        return edited_text
+    
+    # Section 1: FS Line Items
+    items_text = json_editor(
+        "1️⃣ FS Line Items — Mapping Rules (fs_line_items)",
+        "_cfg_edit_items",
+        active_cfg.get('fs_line_items', DEFAULT_FS_LINE_ITEMS),
+        height=450,
+        help_text="แต่ละ key = ชื่อรายการในงบการเงิน, value = {prefixes: [...], keywords: [...], side: 'bs_debit'|'bs_credit'|'pl_debit'|'pl_credit'}"
+    )
+    
+    st.write("---")
+    
+    col_struct1, col_struct2 = st.columns(2)
+    
+    with col_struct1:
+        bs_text = json_editor(
+            "2️⃣ BS Structure — งบฐานะการเงิน (bs_structure)",
+            "_cfg_edit_bs",
+            active_cfg.get('bs_structure', DEFAULT_BS_STRUCTURE),
+            height=450,
+            help_text='แต่ละแถว = [type, label, note, key] — type: "header"|"item"|"subtotal"|"spacer"'
+        )
+    
+    with col_struct2:
+        pl_text = json_editor(
+            "3️⃣ PL Structure — งบกำไรขาดทุน (pl_structure)",
+            "_cfg_edit_pl",
+            active_cfg.get('pl_structure', DEFAULT_PL_STRUCTURE),
+            height=450,
+            help_text='แต่ละแถว = [type, label, note, key] — subtotal key ใส่ "-ชื่อ" เพื่อหัก'
+        )
+    
+    st.write("---")
+    
+    eq_text = json_editor(
+        "4️⃣ EQ Structure — งบส่วนของเจ้าของ (eq_structure)",
+        "_cfg_edit_eq",
+        active_cfg.get('eq_structure', DEFAULT_EQ_STRUCTURE),
+        height=350,
+        help_text='columns = ชื่อคอลัมน์, rows = แต่ละแถว {type, label/label_template, values: {capital, retained, total}}. ค่าพิเศษ: "open_capital", "close_capital", "issued_capital", "open_retained", "close_retained", "net_profit", "auto_sum"'
+    )
+    
+    # ==========================================
+    # ACTION BUTTONS
+    # ==========================================
+    st.write("---")
+    st.markdown("##### 🎛️ Actions")
+    
+    col_a1, col_a2, col_a3, col_a4 = st.columns(4)
+    
+    # ── 🚀 Deploy & Apply (Main action) ──
+    with col_a1:
+        deploy_clicked = st.button("🚀 Deploy & Apply", type="primary", use_container_width=True, 
+                                   help="Validate → Save to fs_config.json → Activate immediately")
+    
+    # ── 📂 Load from File ──
+    with col_a2:
+        uploaded_cfg = st.file_uploader("📂 Load from File", type=["json"], key="cfg_upload", label_visibility="collapsed")
+    
+    # ── 💾 Export Config ──
+    with col_a3:
+        config_json_str = json.dumps(active_cfg, ensure_ascii=False, indent=2)
+        st.download_button(
+            label="💾 Export Config",
+            data=config_json_str.encode('utf-8'),
+            file_name="fs_config.json",
+            mime="application/json",
+            use_container_width=True,
+            help="Download current active config as a backup file"
+        )
+    
+    # ── 🔄 Reset Default ──
+    with col_a4:
+        reset_clicked = st.button("🔄 Reset Default", use_container_width=True,
+                                  help="Overwrite fs_config.json with hardcoded defaults")
+    
+    # ==========================================
+    # HANDLE: Load from File (pre-fill editors only)
+    # ==========================================
+    if uploaded_cfg is not None:
+        try:
+            loaded = json.load(uploaded_cfg)
+            if not isinstance(loaded, dict):
+                st.error("❌ Uploaded file is not a valid config (must be a JSON object)")
+            else:
+                # Pre-fill the editors with loaded content — does NOT activate yet
+                if 'fs_line_items' in loaded:
+                    st.session_state['_cfg_edit_items'] = json.dumps(loaded['fs_line_items'], ensure_ascii=False, indent=2)
+                if 'bs_structure' in loaded:
+                    st.session_state['_cfg_edit_bs'] = json.dumps(loaded['bs_structure'], ensure_ascii=False, indent=2)
+                if 'pl_structure' in loaded:
+                    st.session_state['_cfg_edit_pl'] = json.dumps(loaded['pl_structure'], ensure_ascii=False, indent=2)
+                if 'eq_structure' in loaded:
+                    st.session_state['_cfg_edit_eq'] = json.dumps(loaded['eq_structure'], ensure_ascii=False, indent=2)
+                st.info("📂 Config loaded into editors. Review the changes, then click **🚀 Deploy & Apply** to activate.")
+                st.rerun()
+        except json.JSONDecodeError as e:
+            st.error(f"❌ Invalid JSON file: {e}")
+    
+    # ==========================================
+    # HANDLE: Reset Default
+    # ==========================================
+    if reset_clicked:
+        default_cfg = _build_default_config()
+        # Write defaults to file
+        _save_deployed_config(default_cfg)
+        # Activate in session
+        st.session_state['fs_config'] = default_cfg
+        st.session_state['_config_source'] = 'default (reset)'
+        # Clear editor caches so they reload from defaults
+        for k in ['_cfg_edit_items', '_cfg_edit_bs', '_cfg_edit_pl', '_cfg_edit_eq']:
+            st.session_state.pop(k, None)
+        # Force re-mapping
+        st.session_state.pop('data_parsed', None)
+        st.success("✅ Reset to defaults! Config file overwritten and activated.")
+        st.rerun()
+    
+    # ==========================================
+    # HANDLE: 🚀 Deploy & Apply (the main action)
+    # ==========================================
+    if deploy_clicked:
+        # Step 1: Parse all 4 JSON sections
+        parse_errors = []
+        parsed = {}
+        
+        try:
+            parsed['fs_line_items'] = json.loads(items_text)
+        except json.JSONDecodeError as e:
+            parse_errors.append(("fs_line_items", str(e)))
+        
+        try:
+            parsed['bs_structure'] = json.loads(bs_text)
+        except json.JSONDecodeError as e:
+            parse_errors.append(("bs_structure", str(e)))
+        
+        try:
+            parsed['pl_structure'] = json.loads(pl_text)
+        except json.JSONDecodeError as e:
+            parse_errors.append(("pl_structure", str(e)))
+        
+        try:
+            parsed['eq_structure'] = json.loads(eq_text)
+        except json.JSONDecodeError as e:
+            parse_errors.append(("eq_structure", str(e)))
+        
+        # Step 2: If parse errors, show them and STOP
+        if parse_errors:
+            st.error("### ❌ Deploy Failed — JSON Parse Errors")
+            for section, err in parse_errors:
+                st.error(f"**{section}:** {err}")
+            st.warning("⚠️ Fix the JSON syntax errors above and try again. Nothing was saved.")
+        else:
+            # Step 3: Validate the config
+            issues = _validate_config(parsed)
+            
+            errors = [msg for sev, msg in issues if sev == 'error']
+            warnings = [msg for sev, msg in issues if sev == 'warning']
+            
+            # Step 4: If validation errors, show and STOP
+            if errors:
+                st.error("### ❌ Deploy Failed — Validation Errors")
+                for msg in errors:
+                    st.error(f"❌ {msg}")
+                if warnings:
+                    st.warning("### ⚠️ Warnings (also found)")
+                    for msg in warnings:
+                        st.warning(f"⚠️ {msg}")
+                st.warning("⚠️ Fix the errors above and try again. Nothing was saved.")
+            else:
+                # Step 5: Deploy! (save to file + activate)
+                _save_deployed_config(parsed)
+                st.session_state['fs_config'] = parsed
+                st.session_state['_config_source'] = 'deployed'
+                # Force re-mapping on next reconciliation
+                st.session_state.pop('data_parsed', None)
+                
+                # Step 6: Show success + any warnings
+                st.success(f"### ✅ Deployed Successfully!")
+                st.success(f"Config saved to `{_get_config_path()}` and activated.")
+                
+                if warnings:
+                    st.warning(f"### ⚠️ {len(warnings)} Warning(s) — Config is active but review these:")
+                    for msg in warnings:
+                        st.warning(f"⚠️ {msg}")
+                
+                st.info("💡 Run reconciliation again to see the updated mapping.")
+
 # ==========================================
 # MAIN APP 
 # ==========================================
@@ -606,13 +1113,13 @@ def main():
     st.title("GL & TB Reconciliation Tool")
     st.markdown("Upload your General Ledger (PDF), Trial Balance (Excel), and optionally Trial Balance (PDF) to verify Brought Forward balances.")
     
+    # Initialize config on startup
+    get_active_config()
+    
     default_company = st.session_state.get('_gl_extracted_company', '')
     default_year = st.session_state.get('_gl_extracted_year', 'พ.ศ. 2568')
     default_prior_year = st.session_state.get('_gl_extracted_prior_year', 'พ.ศ. 2567')
     
-    # ---------------------------------------------
-    # UPDATED COMPANY INFO SECTION (Authorized vs Paid-up)
-    # ---------------------------------------------
     with st.expander("ข้อมูลบริษัท / Company Info (สำหรับสร้างงบการเงิน)", expanded=True):
         col_ci1, col_ci2 = st.columns([3, 1])
         with col_ci1:
@@ -679,10 +1186,8 @@ def main():
                     st.session_state['_gl_extracted_year'] = extracted_year
                     if current_year_label == 'พ.ศ. 2568' or not current_year_label: current_year_label = extracted_year
                     try:
-                        # Pull the regex search outside the f-string to avoid the backslash error
                         year_match = re.search(r'\d{4}', extracted_year)
                         prior_yr = f"พ.ศ. {int(year_match.group()) - 1}"
-                        
                         st.session_state['_gl_extracted_prior_year'] = prior_yr
                         if prior_year_label == 'พ.ศ. 2567' or not prior_year_label: 
                             prior_year_label = prior_yr
@@ -712,7 +1217,6 @@ def main():
             merged_df['Missing in TB original'] = pd.isna(merged_df['TB Net Balance'])
             merged_df['Missing in GL original'] = pd.isna(merged_df['GL Net Balance'])
             
-            # Clean spaces from IDs and Names
             merged_df['Account ID'] = merged_df['Account ID'].str.strip()
             merged_df['Account Name'] = merged_df['Account Name'].str.strip().fillna("Unknown")
 
@@ -758,6 +1262,11 @@ def main():
         matches_df = st.session_state['recon_matches_df']
         suspect_df = st.session_state['recon_suspect_df']
 
+        # Use active config for all downstream operations
+        active_items = get_fs_line_items()
+        active_bs = get_bs_structure()
+        active_pl = get_pl_structure()
+
         st.success("Reconciliation Complete!")
         st.subheader("Summary")
         col_s1, col_s2, col_s3, col_s4 = st.columns(4)
@@ -766,8 +1275,8 @@ def main():
         col_s3.metric("Mismatches", len(mismatches_df))
         col_s4.metric("Missing Accounts", len(missing_in_gl_df) + len(missing_in_tb_df))
 
-        tab1, tab2, tab3, tab4, tab_map, tab_export = st.tabs([
-            "Discrepancies", "Missing Records", "Top 10 Suspects", "All Matches", "FS Mapping", "Export Reports"
+        tab1, tab2, tab3, tab4, tab_map, tab_export, tab_config = st.tabs([
+            "Discrepancies", "Missing Records", "Top 10 Suspects", "All Matches", "FS Mapping", "Export Reports", "⚙️ Configuration"
         ])
 
         common_col_config = {
@@ -785,14 +1294,13 @@ def main():
         with tab3: st.dataframe(suspect_df[['Account ID', 'Account Name', 'Max Absolute Balance', 'Status']], use_container_width=True, column_config=common_col_config)
         with tab4: st.dataframe(matches_df[['Account ID', 'Account Name', 'GL Net Balance', 'TB Net Balance', 'GL Brought Forward', 'TB Brought Forward Net', 'BF Difference', 'Status']], use_container_width=True, column_config=common_col_config)
 
-        # ---------------------------------------------
-        # UPDATED TAB MAP (Includes Tax Engine & Subtotals)
-        # ---------------------------------------------
+        # ==========================================
+        # FS MAPPING TAB
+        # ==========================================
         with tab_map:
             st.write("### 🗂️ Master FS Mapping & Verification")
             st.write("Review your mapping and see exactly where the data comes from before generating **FS.xlsx**.")
 
-            # AUTO-DETECT & DYNAMIC CORPORATE TAX CALCULATION
             rev_total = merged_df[merged_df['Account ID'].str.startswith('4', na=False)]['PL Credit'].sum() - merged_df[merged_df['Account ID'].str.startswith('4', na=False)]['PL Debit'].sum()
             exp_total = merged_df[merged_df['Account ID'].str.startswith('5', na=False)]['PL Debit'].sum() - merged_df[merged_df['Account ID'].str.startswith('5', na=False)]['PL Credit'].sum()
             if rev_total == 0 and exp_total == 0:
@@ -830,25 +1338,33 @@ def main():
 
             if corporate_tax > 0 and not (merged_df['Account ID'] == 'TAX-PL').any():
                 tax_label = "SME" if "SME" in applied_tax_rule else "Standard"
+                # Find the tax line item name and other CA name from config
+                tax_fs_name = L_TAX
+                other_ca_fs_name = L_OTHER_CA
+                for name, rules in active_items.items():
+                    if 'ภาษีเงินได้' in name and rules.get('side') == 'pl_debit':
+                        tax_fs_name = name
+                    if rules.get('side') == 'bs_debit' and any(kw in name for kw in ['หมุนเวียนอื่น', 'สินทรัพย์หมุนเวียนอื่น']):
+                        other_ca_fs_name = name
+                
                 tax_rows = pd.DataFrame([
                     {
                         'Account ID': 'TAX-PL', 'Account Name': f'ค่าใช้จ่ายภาษีเงินได้ (Auto {tax_label})',
                         'TB Net Balance': corporate_tax, 'BS Debit': 0.0, 'BS Credit': 0.0, 'PL Debit': corporate_tax, 'PL Credit': 0.0,
-                        'FS Line Item': 'ภาษีเงินได้', 'Missing in TB original': False, 'Missing in GL original': False, 'Status': 'Match'
+                        'FS Line Item': tax_fs_name, 'Missing in TB original': False, 'Missing in GL original': False, 'Status': 'Match'
                     },
                     {
                         'Account ID': 'TAX-BS', 'Account Name': f'ภาษีเงินได้ค้างจ่าย (Auto {tax_label})',
                         'TB Net Balance': corporate_tax, 'BS Debit': 0.0, 'BS Credit': corporate_tax, 'PL Debit': 0.0, 'PL Credit': 0.0,
-                        'FS Line Item': 'สินทรัพย์หมุนเวียนอื่น', 'Missing in TB original': False, 'Missing in GL original': False, 'Status': 'Match'
+                        'FS Line Item': other_ca_fs_name, 'Missing in TB original': False, 'Missing in GL original': False, 'Status': 'Match'
                     }
                 ])
                 merged_df = pd.concat([merged_df, tax_rows], ignore_index=True)
 
-            # NETTING LOGIC
             def get_fs_value(row):
                 fs_line = row.get('FS Line Item', '')
                 if fs_line == 'ไม่จัดประเภท (Unmapped)': return row.get('TB Net Balance', 0.0)
-                rules = FS_LINE_ITEMS.get(fs_line, {})
+                rules = active_items.get(fs_line, {})
                 target_side = rules.get('side', 'bs_debit')
                 bs_dr, bs_cr, pl_dr, pl_cr = row.get('BS Debit', 0.0), row.get('BS Credit', 0.0), row.get('PL Debit', 0.0), row.get('PL Credit', 0.0)
                 if bs_dr == 0 and bs_cr == 0 and pl_dr == 0 and pl_cr == 0: return row.get('TB Net Balance', 0.0)
@@ -870,7 +1386,7 @@ def main():
                 edited_mapping = st.data_editor(
                     mapping_df,
                     column_config={
-                        "FS Line Item": st.column_config.SelectboxColumn("📌 FS Line Item (Group)", options=list(FS_LINE_ITEMS.keys()) + ["ไม่จัดประเภท (Unmapped)"], required=True),
+                        "FS Line Item": st.column_config.SelectboxColumn("📌 FS Line Item (Group)", options=list(active_items.keys()) + ["ไม่จัดประเภท (Unmapped)"], required=True),
                         "Account ID": st.column_config.Column(disabled=True), "Account Name": st.column_config.Column(disabled=True),
                         "FS Value": st.column_config.NumberColumn("📊 FS Value (สุทธิ)", format="%,.2f"),
                         "BS Debit": None, "BS Credit": None, "PL Debit": None, "PL Credit": None, "TB Net Balance": None
@@ -888,35 +1404,42 @@ def main():
             merged_df['FS Line Item'] = edited_mapping['FS Line Item']
             merged_df['FS Value'] = edited_mapping['FS Value']
 
-           # ==========================================
-            # 4. HIERARCHICAL FS PREVIEWS (TABS)
+            # ==========================================
+            # HIERARCHICAL FS PREVIEWS
             # ==========================================
             st.write("---")
             st.subheader("📑 Interactive Financial Statements Preview (งบการเงิน)")
             st.write("Review the final structure. Click on line items to see the raw TB data. Highlighted rows are auto-calculated.")
 
-            # Calculate P&L and BS Summaries for the previews
-            pl_summary = {k: edited_mapping.loc[edited_mapping['FS Line Item'] == k, 'FS Value'].sum() for k, v in FS_LINE_ITEMS.items() if v['side'] in ['pl_debit', 'pl_credit']}
-            pl_computed = build_fs_from_mapping(pl_summary, FS_PL_STRUCTURE)
+            # Find dynamic labels for share capital & retained earnings
+            share_capital_label = None
+            retained_earnings_label = None
+            for name, rules in active_items.items():
+                if rules.get('side') == 'bs_credit' and any(kw in name for kw in ['ทุน', 'หุ้น', 'capital']):
+                    if 'กู้' not in name and 'เจ้าหนี้' not in name:
+                        share_capital_label = name
+                if 'กำไร' in name and 'สะสม' in name:
+                    retained_earnings_label = name
+
+            pl_summary = {k: edited_mapping.loc[edited_mapping['FS Line Item'] == k, 'FS Value'].sum() for k, v in active_items.items() if v['side'] in ['pl_debit', 'pl_credit']}
+            pl_computed = build_fs_from_mapping(pl_summary, active_pl)
             net_profit = pl_computed.get('กำไร(ขาดทุน)สุทธิ', 0.0)
 
-            bs_summary = {k: edited_mapping.loc[edited_mapping['FS Line Item'] == k, 'FS Value'].sum() for k, v in FS_LINE_ITEMS.items() if v['side'] in ['bs_debit', 'bs_credit']}
-            bs_summary['กำไร(ขาดทุน)สะสม'] = bs_summary.get('กำไร(ขาดทุน)สะสม', 0.0) + net_profit
+            bs_summary = {k: edited_mapping.loc[edited_mapping['FS Line Item'] == k, 'FS Value'].sum() for k, v in active_items.items() if v['side'] in ['bs_debit', 'bs_credit']}
+            if retained_earnings_label:
+                bs_summary[retained_earnings_label] = bs_summary.get(retained_earnings_label, 0.0) + net_profit
             
             total_paid_capital = paid_shares * paid_par
-            if total_paid_capital > 0: 
-                bs_summary['ทุนเรือนหุ้น'] = total_paid_capital
+            if total_paid_capital > 0 and share_capital_label: 
+                bs_summary[share_capital_label] = total_paid_capital
 
-            bs_computed = build_fs_from_mapping(bs_summary, FS_BS_STRUCTURE)
+            bs_computed = build_fs_from_mapping(bs_summary, active_bs)
 
-            # Create Sub-tabs for the 3 reports
             preview_bs, preview_pl, preview_eq = st.tabs(["🏛️ งบฐานะการเงิน (Balance Sheet)", "📈 งบกำไรขาดทุน (Income Statement)", "⚖️ งบส่วนของเจ้าของ (Equity)"])
 
-            # ---------------------------------------------
-            # TAB 1: BALANCE SHEET PREVIEW
-            # ---------------------------------------------
+            # BS Preview
             with preview_bs:
-                for row_type, label, note, key in FS_BS_STRUCTURE:
+                for row_type, label, note, key in active_bs:
                     if row_type == 'spacer':
                         st.write("") 
                         continue
@@ -926,8 +1449,6 @@ def main():
                         
                     if row_type == 'subtotal':
                         val = bs_computed.get(label, 0.0)
-                        
-                        # 1. Dynamically build the math formula for the tooltip
                         formula_parts = []
                         for k in key:
                             if k.startswith('-'): formula_parts.append(f"- {k[1:]}")
@@ -935,7 +1456,6 @@ def main():
                         formula_text = (" ".join(formula_parts)).lstrip("+ ")
                         tooltip_text = f"วิธีการคำนวณ: {formula_text}"
 
-                        # 2. Draw Custom Box with Hover Tooltip (Supports Dark/Light Mode)
                         if "รวมหนี้สินและส่วนของเจ้าของ" in label or label == "รวมสินทรัพย์":
                             html_box = f"""
                             <div title="{tooltip_text}" style="padding: 15px; border-radius: 5px; background-color: var(--secondary-background-color); color: var(--text-color); border-left: 8px solid #28a745; margin-bottom: 10px; cursor: help;">
@@ -955,18 +1475,35 @@ def main():
 
                     if row_type == 'item':
                         item_total = bs_computed.get(label, 0.0)
-                        if key == 'ทุนเรือนหุ้น':
+                        # ZERO-ROW SUPPRESSION: Skip if zero in all years
+                        # (For single-year mode, just check current; for multi-year, check all)
+                        if key and key not in (share_capital_label, retained_earnings_label):
+                            if item_total == 0.0:
+                                continue
+                        if share_capital_label and key == share_capital_label:
                             with st.expander(f"📄 **{label}** : {item_total:,.2f}"):
                                 st.caption("ดึงข้อมูลอัตโนมัติจากการตั้งค่า Company Info:")
                                 st.markdown(f"**ทุนจดทะเบียน (Authorized):**\n- หุ้นสามัญ {reg_shares:,.0f} หุ้น มูลค่าหุ้นละ {reg_par:,.2f} บาท (รวม {reg_shares*reg_par:,.2f} บาท)")
                                 st.markdown(f"**ทุนที่ออกและเรียกชำระแล้ว (Paid-up):**\n- หุ้นสามัญ {paid_shares:,.0f} หุ้น มูลค่าหุ้นละ {paid_par:,.2f} บาท (รวม {paid_shares*paid_par:,.2f} บาท)")
                                 st.info("💡 หมายเหตุ: ยอดที่นำไปคำนวณทางคณิตศาสตร์ในงบการเงินคือ **ทุนที่ออกและเรียกชำระแล้ว** เท่านั้น")
-                        elif key == 'กำไร(ขาดทุน)สะสม':
+                        elif retained_earnings_label and key == retained_earnings_label:
                             with st.expander(f"📄 **{label}** (ยังไม่ได้จัดสรร) : {item_total:,.2f}"):
                                 st.caption("Retained Earnings + Current Year Net Profit")
-                                tb_re = bs_summary.get('กำไร(ขาดทุน)สะสม', 0.0) - net_profit
+                                tb_re = bs_summary.get(retained_earnings_label, 0.0) - net_profit
                                 st.write(f"- กำไรสะสมต้นงวด (จาก TB): {tb_re:,.2f}")
                                 st.write(f"- กำไร(ขาดทุน)สุทธิปีปัจจุบัน: {net_profit:,.2f}")
+                        elif isinstance(key, list):
+                            with st.expander(f"📄 **{label}** : {item_total:,.2f}"):
+                                st.caption("คำนวณจาก:")
+                                for ref in key:
+                                    clean_ref = ref.lstrip('-')
+                                    sign = "➖" if ref.startswith('-') else "➕"
+                                    ref_mask = edited_mapping['FS Line Item'] == clean_ref
+                                    ref_df = edited_mapping[ref_mask]
+                                    ref_total = ref_df['FS Value'].sum() if not ref_df.empty else 0.0
+                                    st.markdown(f"**{sign} {clean_ref}** : {ref_total:,.2f}")
+                                    if not ref_df.empty:
+                                        st.dataframe(ref_df[['Account ID', 'Account Name', 'FS Value']].reset_index(drop=True), use_container_width=True, hide_index=True, column_config={"Account ID": "รหัสบัญชี", "Account Name": "ชื่อบัญชี", "FS Value": st.column_config.NumberColumn("ยอดเงิน", format="%,.2f")})
                         else:
                             with st.expander(f"📄 **{label}** : {item_total:,.2f}"):
                                 mask = edited_mapping['FS Line Item'] == key
@@ -980,7 +1517,7 @@ def main():
             # TAB 2: INCOME STATEMENT PREVIEW
             # ---------------------------------------------
             with preview_pl:
-                for row_type, label, note, key in FS_PL_STRUCTURE:
+                for row_type, label, note, key in active_pl:
                     if row_type == 'spacer':
                         st.write("") 
                         continue
@@ -990,8 +1527,6 @@ def main():
                         
                     if row_type == 'subtotal':
                         val = pl_computed.get(label, 0.0)
-                        
-                        # 1. Dynamically build the math formula for the tooltip
                         formula_parts = []
                         for k in key:
                             if k.startswith('-'): formula_parts.append(f"- {k[1:]}")
@@ -999,11 +1534,10 @@ def main():
                         formula_text = (" ".join(formula_parts)).lstrip("+ ")
                         tooltip_text = f"วิธีการคำนวณ: {formula_text}"
 
-                        # 2. Draw Custom Box with Hover Tooltip
                         if label == "กำไร(ขาดทุน)สุทธิ": 
-                            border_color = "#28a745" if val >= 0 else "#dc3545" # Green if profit, Red if loss
+                            border_color = "#28a745" if val >= 0 else "#dc3545"
                             html_box = f"""
-                            <div title="{tooltip_text}" style="padding: 15px; border-radius: 5px; background-color: var(--secondary-background-color); color: var(--text-color); border-left: 8px solid {border_color}; margin-bottom: 10px; cursor: help;">
+                            <div title="{tooltip_text}\" style="padding: 15px; border-radius: 5px; background-color: var(--secondary-background-color); color: var(--text-color); border-left: 8px solid {border_color}; margin-bottom: 10px; cursor: help;">
                                 <strong style="font-size: 1.1em;">{label}</strong><br>
                                 <span style="font-size: 1.8em; font-weight: bold;">{val:,.2f} บาท</span>
                             </div>
@@ -1011,7 +1545,7 @@ def main():
                             st.markdown(html_box, unsafe_allow_html=True)
                         else: 
                             html_box = f"""
-                            <div title="{tooltip_text}" style="padding: 10px; border-radius: 5px; background-color: var(--secondary-background-color); color: var(--text-color); border-left: 5px solid #007bff; margin-bottom: 10px; cursor: help;">
+                            <div title="{tooltip_text}\" style="padding: 10px; border-radius: 5px; background-color: var(--secondary-background-color); color: var(--text-color); border-left: 5px solid #007bff; margin-bottom: 10px; cursor: help;">
                                 <strong>∑ {label}</strong> : {val:,.2f}
                             </div>
                             """
@@ -1020,14 +1554,29 @@ def main():
 
                     if row_type == 'item':
                         item_total = pl_computed.get(label, 0.0)
+                        # ZERO-ROW SUPPRESSION: Skip if zero
+                        if item_total == 0.0:
+                            continue
                         with st.expander(f"📄 **{label}** : {item_total:,.2f}"):
-                            mask = edited_mapping['FS Line Item'] == key
-                            line_df = edited_mapping[mask]
-                            if not line_df.empty:
-                                display_df = line_df[['Account ID', 'Account Name', 'FS Value']].reset_index(drop=True)
-                                st.dataframe(display_df, use_container_width=True, column_config={"Account ID": "รหัสบัญชี", "Account Name": "ชื่อบัญชี", "FS Value": st.column_config.NumberColumn("ยอดเงิน (Value)", format="%,.2f")})
-                            else: 
-                                st.warning("ยังไม่มีบัญชีที่ผูกกับรายการนี้")
+                            if isinstance(key, list):
+                                st.caption("คำนวณจาก:")
+                                for ref in key:
+                                    clean_ref = ref.lstrip('-')
+                                    sign = "➖" if ref.startswith('-') else "➕"
+                                    ref_mask = edited_mapping['FS Line Item'] == clean_ref
+                                    ref_df = edited_mapping[ref_mask]
+                                    ref_total = ref_df['FS Value'].sum() if not ref_df.empty else 0.0
+                                    st.markdown(f"**{sign} {clean_ref}** : {ref_total:,.2f}")
+                                    if not ref_df.empty:
+                                        st.dataframe(ref_df[['Account ID', 'Account Name', 'FS Value']].reset_index(drop=True), use_container_width=True, hide_index=True, column_config={"Account ID": "รหัสบัญชี", "Account Name": "ชื่อบัญชี", "FS Value": st.column_config.NumberColumn("ยอดเงิน", format="%,.2f")})
+                            else:
+                                mask = edited_mapping['FS Line Item'] == key
+                                line_df = edited_mapping[mask]
+                                if not line_df.empty:
+                                    display_df = line_df[['Account ID', 'Account Name', 'FS Value']].reset_index(drop=True)
+                                    st.dataframe(display_df, use_container_width=True, column_config={"Account ID": "รหัสบัญชี", "Account Name": "ชื่อบัญชี", "FS Value": st.column_config.NumberColumn("ยอดเงิน (Value)", format="%,.2f")})
+                                else: 
+                                    st.warning("ยังไม่มีบัญชีที่ผูกกับรายการนี้")
 
             # ---------------------------------------------
             # TAB 3: EQUITY STATEMENT PREVIEW
@@ -1036,9 +1585,8 @@ def main():
                 st.markdown("#### ⚖️ งบการเปลี่ยนแปลงส่วนของเจ้าของ")
                 st.write(f"สำหรับปีสิ้นสุดวันที่ 31 ธันวาคม {current_year_label}")
                 
-                # Calculate the 3x3 Matrix values
                 open_cap = paid_shares * paid_par
-                open_re = bs_summary.get('กำไร(ขาดทุน)สะสม', 0.0) - net_profit
+                open_re = bs_summary.get(retained_earnings_label or L_RETAINED_EARNINGS, 0.0) - net_profit
                 
                 eq_data = {
                     "รายการ (Description)": [
@@ -1052,8 +1600,6 @@ def main():
                 }
                 
                 eq_df = pd.DataFrame(eq_data)
-                
-                # Display as a beautiful dataframe
                 st.dataframe(
                     eq_df, 
                     use_container_width=True, 
@@ -1065,16 +1611,17 @@ def main():
                     }
                 )
 
-        # ---------------------------------------------
-        # EXPORT REPORTS
-        # ---------------------------------------------
+        # ==========================================
+        # EXPORT REPORTS TAB
+        # ==========================================
         with tab_export:
             st.write("Download your reconciled data or generate the finalized Financial Statements.")
             
-            # FIX: Ensure we strictly use the smartly calculated 'FS Value' 
+            active_items_export = get_fs_line_items()
+            
             def compute_fs_summary(df):
                 summary = {}
-                for fs_line in FS_LINE_ITEMS.keys():
+                for fs_line in active_items_export.keys():
                     mask = df['FS Line Item'] == fs_line
                     if 'FS Value' in df.columns: 
                         summary[fs_line] = df.loc[mask, 'FS Value'].sum()
@@ -1121,7 +1668,6 @@ def main():
                 if not company_name: st.warning("กรุณากรอกชื่อบริษัทด้านบน (Company Info) ก่อนสร้างงบ")
                 else:
                     try:
-                        # Package up the equity details to pass to the exporter
                         eq_details = {
                             'reg_shares': reg_shares,
                             'reg_par': reg_par,
@@ -1140,7 +1686,7 @@ def main():
                 if legacy_template_file:
                     try:
                         wb = openpyxl.load_workbook(legacy_template_file)
-                        fs_names = list(FS_LINE_ITEMS.keys())
+                        fs_names = list(active_items_export.keys())
                         for sheet_name in wb.sheetnames:
                             sheet = wb[sheet_name]
                             for row in sheet.iter_rows():
@@ -1165,4 +1711,11 @@ def main():
                         st.download_button(label="Download Populated Template", data=buffer_fs.getvalue(), file_name=f"Generated_{legacy_template_file.name}", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="download_legacy_fs")
                     except Exception as e: st.error(f"Error generating FS: {e}")
                 else: st.info("Please upload an FS template to use this feature.")
+
+        # ==========================================
+        # CONFIGURATION TAB
+        # ==========================================
+        with tab_config:
+            render_config_tab()
+
 main()
