@@ -382,25 +382,25 @@
                         <!-- JSON Editors -->
                         <h4>1️⃣ FS Line Items — Mapping Rules (fs_line_items)</h4>
                         <p class="text-muted">แต่ละ key = ชื่อรายการในงบการเงิน, value = {prefixes, keywords, side}</p>
-                        <textarea id="cfgItems" class="json-editor" rows="20"></textarea>
+                        <div id="cfgItems" class="json-editor" style="height: 450px;"></div>
 
                         <hr>
                         <div class="form-row">
                             <div style="flex:1">
                                 <h4>2️⃣ BS Structure — งบฐานะการเงิน</h4>
                                 <p class="text-muted">แต่ละแถว = [type, label, note, key]</p>
-                                <textarea id="cfgBs" class="json-editor" rows="20"></textarea>
+                                <div id="cfgBs" class="json-editor" style="height: 450px;"></div>
                             </div>
                             <div style="flex:1">
                                 <h4>3️⃣ PL Structure — งบกำไรขาดทุน</h4>
                                 <p class="text-muted">แต่ละแถว = [type, label, note, key]</p>
-                                <textarea id="cfgPl" class="json-editor" rows="20"></textarea>
+                                <div id="cfgPl" class="json-editor" style="height: 450px;"></div>
                             </div>
                         </div>
 
                         <hr>
                         <h4>4️⃣ EQ Structure — งบส่วนของเจ้าของ</h4>
-                        <textarea id="cfgEq" class="json-editor" rows="15"></textarea>
+                        <div id="cfgEq" class="json-editor" style="height: 350px;"></div>
 
                         <hr>
                         <h4>🎛️ Actions</h4>
@@ -427,6 +427,9 @@
     <script>
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
     </script>
+
+    <!-- Ace Editor for Config -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7/ace.js"></script>
 
     <!-- SheetJS -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>

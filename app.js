@@ -1903,7 +1903,28 @@ function saveAs(blob, filename) {
 // ======================================================
 // 21. CONFIG EDITOR UI
 // ======================================================
+
+// Ace Editor instances
+let aceEditors = {};
+
 function initConfigEditors() {
+  // Initialize Ace Editors
+  const editorIds = ["cfgItems", "cfgBs", "cfgPl", "cfgEq"];
+  editorIds.forEach(id => {
+    if (!aceEditors[id] && document.getElementById(id)) {
+      const editor = ace.edit(id);
+      editor.setTheme("ace/theme/tomorrow_night_eighties");
+      editor.session.setMode("ace/mode/json");
+      editor.setOptions({
+        fontSize: "14px",
+        showPrintMargin: false,
+        wrap: true,
+        tabSize: 2
+      });
+      aceEditors[id] = editor;
+    }
+  });
+
   const cfg = getActiveConfig();
   setEditorValue("cfgItems", cfg.fs_line_items || DEFAULT_CONFIG.fs_line_items);
   setEditorValue("cfgBs", cfg.bs_structure || DEFAULT_CONFIG.bs_structure);
@@ -1918,14 +1939,16 @@ function initConfigEditors() {
 }
 
 function setEditorValue(id, obj) {
-  const el = document.getElementById(id);
-  if (el) el.value = JSON.stringify(obj, null, 2);
+  const editor = aceEditors[id];
+  if (editor) {
+    editor.setValue(JSON.stringify(obj, null, 2), -1); // -1 moves cursor to start
+  }
 }
 
 function getEditorValue(id) {
-  const el = document.getElementById(id);
-  if (!el) return null;
-  return JSON.parse(el.value);
+  const editor = aceEditors[id];
+  if (!editor) return null;
+  return JSON.parse(editor.getValue());
 }
 
 function deployConfig() {
