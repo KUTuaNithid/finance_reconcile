@@ -378,33 +378,21 @@
                         </section>
 
                         <hr>
-
-                        <!-- JSON Editors -->
-                        <h4>1️⃣ FS Line Items — Mapping Rules (fs_line_items)</h4>
-                        <p class="text-muted">แต่ละ key = ชื่อรายการในงบการเงิน, value = {prefixes, keywords, side}</p>
-                        <div id="cfgItems" class="json-editor" style="height: 450px;"></div>
-
-                        <hr>
-                        <div class="form-row">
-                            <div style="flex:1">
-                                <h4>2️⃣ BS Structure — งบฐานะการเงิน</h4>
-                                <p class="text-muted">แต่ละแถว = [type, label, note, key]</p>
-                                <div id="cfgBs" class="json-editor" style="height: 450px;"></div>
-                            </div>
-                            <div style="flex:1">
-                                <h4>3️⃣ PL Structure — งบกำไรขาดทุน</h4>
-                                <p class="text-muted">แต่ละแถว = [type, label, note, key]</p>
-                                <div id="cfgPl" class="json-editor" style="height: 450px;"></div>
+                        
+                        <div class="config-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                            <h3 style="margin: 0;">⚙️ Configuration Editor</h3>
+                            <div class="mode-toggle-container" style="display: flex; align-items: center; gap: 10px; background: var(--card-bg); padding: 8px 16px; border-radius: 20px; border: 1px solid var(--border-color);">
+                                <span id="easyModeLabel" style="font-weight: bold; color: var(--accent-color);">Easy Mode (แท็บย่อย)</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="configModeToggle">
+                                    <span class="slider round"></span>
+                                </label>
+                                <span id="advanceModeLabel" style="color: var(--text-muted);">Advance Mode (รวมหน้าเดียว)</span>
                             </div>
                         </div>
 
-                        <hr>
-                        <h4>4️⃣ EQ Structure — งบส่วนของเจ้าของ</h4>
-                        <div id="cfgEq" class="json-editor" style="height: 350px;"></div>
-
-                        <hr>
-                        <h4>🎛️ Actions</h4>
-                        <div class="config-actions">
+                        <!-- Sticky Actions -->
+                        <div class="config-actions sticky-actions">
                             <button id="cfgDeployBtn" class="btn btn-primary">🚀 Deploy & Apply</button>
                             <label class="btn btn-secondary" for="cfgImportFile">📂 Load from File
                                 <input type="file" id="cfgImportFile" accept=".json" style="display:none">
@@ -412,7 +400,90 @@
                             <button id="cfgExportBtn" class="btn btn-secondary">💾 Export Config</button>
                             <button id="cfgResetBtn" class="btn btn-danger">🔄 Reset Default</button>
                         </div>
-                        <div id="cfgValidationResults"></div>
+                        <div id="cfgValidationResults" style="margin-bottom: 1rem;"></div>
+
+                        <!-- Editor Container -->
+                        <div id="configEditorContainer" class="mode-easy">
+                            
+                            <!-- Sub-tabs (Visible only in Easy Mode) -->
+                            <div class="sub-tabs config-sub-tabs">
+                                <button class="sub-tab-btn active" onclick="switchConfigTab('cfg-tab-items', this)">1️⃣ กฎการจับคู่บัญชี</button>
+                                <button class="sub-tab-btn" onclick="switchConfigTab('cfg-tab-bs', this)">2️⃣ งบฐานะการเงิน</button>
+                                <button class="sub-tab-btn" onclick="switchConfigTab('cfg-tab-pl', this)">3️⃣ งบกำไรขาดทุน</button>
+                                <button class="sub-tab-btn" onclick="switchConfigTab('cfg-tab-eq', this)">4️⃣ งบส่วนของเจ้าของ</button>
+                            </div>
+
+                            <!-- EASY MODE (Visual GUI Forms) -->
+                            <div id="easyModePanels" class="config-panels easy-panels">
+                                <div id="cfg-tab-items" class="config-panel active">
+                                    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                                        <div>
+                                            <h4 style="margin:0;">1️⃣ FS Line Items — กฎการจับคู่บัญชี</h4>
+                                            <p class="text-muted" style="margin:0; font-size:0.9em;">กำหนดชื่อรายการในงบ และคำค้นหาสำหรับดึงยอดจากงบทดลอง</p>
+                                        </div>
+                                        <button class="btn btn-sm btn-success" onclick="addGuiLineItem()">➕ เพิ่มรายการใหม่</button>
+                                    </div>
+                                    <div id="guiItemsContainer" class="gui-container"></div>
+                                </div>
+                                
+                                <div id="cfg-tab-bs" class="config-panel">
+                                    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                                        <div>
+                                            <h4 style="margin:0;">2️⃣ BS Structure — จัดโครงสร้างงบฐานะการเงิน</h4>
+                                        </div>
+                                        <button class="btn btn-sm btn-success" onclick="addGuiStructureRow('bs')">➕ เพิ่มบรรทัดใหม่</button>
+                                    </div>
+                                    <div id="guiBsContainer" class="gui-container"></div>
+                                </div>
+                                
+                                <div id="cfg-tab-pl" class="config-panel">
+                                    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                                        <div>
+                                            <h4 style="margin:0;">3️⃣ PL Structure — จัดโครงสร้างงบกำไรขาดทุน</h4>
+                                        </div>
+                                        <button class="btn btn-sm btn-success" onclick="addGuiStructureRow('pl')">➕ เพิ่มบรรทัดใหม่</button>
+                                    </div>
+                                    <div id="guiPlContainer" class="gui-container"></div>
+                                </div>
+                                
+                                <div id="cfg-tab-eq" class="config-panel">
+                                    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                                        <div>
+                                            <h4 style="margin:0;">4️⃣ EQ Structure — จัดโครงสร้างงบส่วนของเจ้าของ</h4>
+                                        </div>
+                                        <button class="btn btn-sm btn-success" onclick="addGuiStructureRow('eq')">➕ เพิ่มบรรทัดใหม่</button>
+                                    </div>
+                                    <div id="guiEqContainer" class="gui-container"></div>
+                                </div>
+                            </div>
+
+                            <!-- ADVANCE MODE (JSON Code Editors) -->
+                            <div id="advanceModePanels" class="config-panels advance-panels">
+                                <div id="cfg-tab-items-adv" class="config-panel-adv">
+                                    <h4>1️⃣ FS Line Items — Mapping Rules</h4>
+                                    <p class="text-muted">แต่ละ key = ชื่อรายการในงบการเงิน, value = {prefixes, keywords, side}</p>
+                                    <div id="cfgItems" class="json-editor" style="height: 450px;"></div>
+                                </div>
+                                
+                                <div id="cfg-tab-bs-adv" class="config-panel-adv">
+                                    <h4>2️⃣ BS Structure — งบฐานะการเงิน</h4>
+                                    <p class="text-muted">แต่ละแถว = [type, label, note, key]</p>
+                                    <div id="cfgBs" class="json-editor" style="height: 450px;"></div>
+                                </div>
+                                
+                                <div id="cfg-tab-pl-adv" class="config-panel-adv">
+                                    <h4>3️⃣ PL Structure — งบกำไรขาดทุน</h4>
+                                    <p class="text-muted">แต่ละแถว = [type, label, note, key]</p>
+                                    <div id="cfgPl" class="json-editor" style="height: 450px;"></div>
+                                </div>
+                                
+                                <div id="cfg-tab-eq-adv" class="config-panel-adv">
+                                    <h4>4️⃣ EQ Structure — งบส่วนของเจ้าของ</h4>
+                                    <div id="cfgEq" class="json-editor" style="height: 350px;"></div>
+                                </div>
+                            </div>
+
+                        </div>
                     </div>
                 </div>
             </div>

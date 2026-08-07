@@ -1936,6 +1936,9 @@ function initConfigEditors() {
     const hasCustom = localStorage.getItem(CONFIG_STORAGE_KEY) !== null;
     sourceInfo.innerHTML = `📍 Config source: <strong>${hasCustom ? "localStorage (custom)" : "default"}</strong>`;
   }
+  
+  // Also sync the config to the Easy Mode GUI
+  syncJsonToGui();
 }
 
 function setEditorValue(id, obj) {
@@ -1952,6 +1955,11 @@ function getEditorValue(id) {
 }
 
 function deployConfig() {
+  const container = document.getElementById("configEditorContainer");
+  if (container && container.classList.contains("mode-easy")) {
+      syncGuiToJson(); // Ensure JSON is up to date with GUI before deploying
+  }
+  
   const resultArea = document.getElementById("cfgValidationResults");
   try {
     const parsed = {
@@ -1999,6 +2007,11 @@ function deployConfig() {
 }
 
 function exportConfig() {
+  const container = document.getElementById("configEditorContainer");
+  if (container && container.classList.contains("mode-easy")) {
+      syncGuiToJson(); // Ensure JSON is up to date with GUI before exporting
+  }
+  
   const cfg = getActiveConfig();
   const blob = new Blob([JSON.stringify(cfg, null, 2)], { type: "application/json" });
   saveAs(blob, "fs_config.json");
@@ -2035,4 +2048,273 @@ function importConfigFile(event) {
   reader.readAsText(file);
   // Reset file input so same file can be loaded again
   event.target.value = "";
+}
+
+// ======================================================
+// 22. CONFIG UI TOGGLES (Easy / Advance Mode)
+// ======================================================
+
+function switchConfigTab(tabId, btnElement) {
+  // Update active button
+  const buttons = document.querySelectorAll(".config-sub-tabs .sub-tab-btn");
+  buttons.forEach(b => b.classList.remove("active"));
+  if (btnElement) btnElement.classList.add("active");
+
+  // Update active panel (Easy Mode)
+  const panels = document.querySelectorAll(".config-panels .config-panel");
+  panels.forEach(p => p.classList.remove("active"));
+  const target = document.getElementById(tabId);
+  if (target) {
+    target.classList.add("active");
+  }
+
+  // Update active panel (Advance Mode)
+  const advPanels = document.querySelectorAll(".config-panels .config-panel-adv");
+  advPanels.forEach(p => p.classList.remove("active"));
+  const targetAdv = document.getElementById(tabId + "-adv");
+  if (targetAdv) {
+    targetAdv.classList.add("active");
+  }
+
+  // Trigger resize on Ace Editor inside the active tab
+  // Because Ace doesn't render properly when initialized in a hidden div
+  const editorMap = {
+    'cfg-tab-items': 'cfgItems',
+    'cfg-tab-bs': 'cfgBs',
+    'cfg-tab-pl': 'cfgPl',
+    'cfg-tab-eq': 'cfgEq'
+  };
+  const editorId = editorMap[tabId];
+  if (editorId && aceEditors[editorId]) {
+    aceEditors[editorId].resize();
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const toggle = document.getElementById("configModeToggle");
+  const container = document.getElementById("configEditorContainer");
+  
+  if (toggle && container) {
+    toggle.addEventListener("change", function() {
+      if (this.checked) {
+        // Switching to Advance Mode (JSON)
+        syncGuiToJson(); // Push GUI changes to JSON
+        container.classList.remove("mode-easy");
+        container.classList.add("mode-advance");
+      } else {
+        // Switching to Easy Mode (GUI)
+        syncJsonToGui(); // Pull JSON changes to GUI
+        container.classList.remove("mode-advance");
+        container.classList.add("mode-easy");
+      }
+      
+      // Resize all editors to fit new layout
+      Object.values(aceEditors).forEach(editor => {
+        if (editor) editor.resize();
+      });
+    });
+  }
+});
+
+// ======================================================
+// 23. GUI CONFIG EDITOR (EASY MODE)
+// ======================================================
+
+// Helper to escape HTML to prevent XSS in inputs
+function escapeHtml(unsafe) {
+    if (typeof unsafe !== 'string') return '';
+    return unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
+function syncJsonToGui() {
+    const cfgItems = getEditorValue("cfgItems") || {};
+    const cfgBs = getEditorValue("cfgBs") || [];
+    const cfgPl = getEditorValue("cfgPl") || [];
+    const cfgEq = getEditorValue("cfgEq") || [];
+    
+    renderGuiItems(cfgItems);
+    renderGuiStructure('bs', cfgBs);
+    renderGuiStructure('pl', cfgPl);
+    renderGuiStructure('eq', cfgEq);
+}
+
+function syncGuiToJson() {
+    // Collect Items
+    const items = {};
+    const itemRows = document.querySelectorAll('#guiItemsContainer .gui-row');
+    itemRows.forEach(row => {
+        const key = row.querySelector('.item-key').value.trim();
+        const side = row.querySelector('.item-side').value;
+        const prefixes = row.querySelector('.item-prefixes').value.split(',').map(s => s.trim()).filter(Boolean);
+        const keywords = row.querySelector('.item-keywords').value.split(',').map(s => s.trim()).filter(Boolean);
+        
+        if (key) {
+            items[key] = {
+                prefixes: prefixes,
+                keywords: keywords,
+                side: side
+            };
+        }
+    });
+    setEditorValue("cfgItems", items);
+
+    // Collect Structure
+    const collectStructure = (type) => {
+        const structure = [];
+        const rows = document.querySelectorAll(`#gui${type.charAt(0).toUpperCase() + type.slice(1)}Container .gui-row`);
+        rows.forEach(row => {
+            const rowType = row.querySelector('.struct-type').value;
+            const label = row.querySelector('.struct-label').value.trim();
+            const note = row.querySelector('.struct-note').value.trim();
+            let key = row.querySelector('.struct-key') ? row.querySelector('.struct-key').value : "";
+            if (rowType !== 'item') key = ""; // Only items have keys
+            
+            structure.push([rowType, label, note, key]);
+        });
+        return structure;
+    };
+
+    setEditorValue("cfgBs", collectStructure('bs'));
+    setEditorValue("cfgPl", collectStructure('pl'));
+    setEditorValue("cfgEq", collectStructure('eq'));
+}
+
+function renderGuiItems(itemsObj) {
+    const container = document.getElementById('guiItemsContainer');
+    container.innerHTML = '';
+    
+    for (const [key, val] of Object.entries(itemsObj)) {
+        container.appendChild(createGuiItemRow(key, val));
+    }
+}
+
+function createGuiItemRow(key = "", val = {side: "asset", prefixes: [], keywords: []}) {
+    const row = document.createElement('div');
+    row.className = 'gui-row';
+    
+    const sideOptions = `
+        <option value="asset" ${val.side==='asset'?'selected':''}>สินทรัพย์ (Asset)</option>
+        <option value="liability_equity" ${val.side==='liability_equity'?'selected':''}>หนี้สิน/ทุน (Liab/Eq)</option>
+        <option value="revenue" ${val.side==='revenue'?'selected':''}>รายได้ (Revenue)</option>
+        <option value="expense" ${val.side==='expense'?'selected':''}>ค่าใช้จ่าย (Expense)</option>
+    `;
+
+    row.innerHTML = `
+        <div class="gui-col" style="flex:2;">
+            <label>ชื่อรายการ (Key)</label>
+            <input type="text" class="gui-input item-key" value="${escapeHtml(key)}" placeholder="เช่น เงินสด">
+        </div>
+        <div class="gui-col" style="flex:2;">
+            <label>หมวดหมู่ (Side)</label>
+            <select class="gui-input item-side">${sideOptions}</select>
+        </div>
+        <div class="gui-col" style="flex:2;">
+            <label title="รหัสบัญชีนำหน้า (คั่นด้วยลูกน้ำ)">Prefixes ℹ️</label>
+            <input type="text" class="gui-input item-prefixes" value="${escapeHtml(val.prefixes.join(','))}" placeholder="เช่น 11, 110">
+        </div>
+        <div class="gui-col" style="flex:3;">
+            <label title="คำค้นหาในชื่อบัญชี (คั่นด้วยลูกน้ำ)">Keywords ℹ️</label>
+            <input type="text" class="gui-input item-keywords" value="${escapeHtml(val.keywords.join(','))}" placeholder="เช่น เงินสด,เงินฝาก">
+        </div>
+        <button class="btn-del" onclick="this.parentElement.remove(); syncGuiToJson();" title="ลบรายการ">❌</button>
+    `;
+    
+    // Auto sync on change
+    row.querySelectorAll('input, select').forEach(input => {
+        input.addEventListener('change', syncGuiToJson);
+    });
+    
+    return row;
+}
+
+function addGuiLineItem() {
+    document.getElementById('guiItemsContainer').appendChild(createGuiItemRow());
+    syncGuiToJson();
+}
+
+function renderGuiStructure(id, structureArr) {
+    const container = document.getElementById(`gui${id.charAt(0).toUpperCase() + id.slice(1)}Container`);
+    container.innerHTML = '';
+    
+    structureArr.forEach(row => {
+        container.appendChild(createGuiStructureRow(id, row));
+    });
+}
+
+function createGuiStructureRow(containerId, rowData = ['item', '', '', '']) {
+    const row = document.createElement('div');
+    row.className = 'gui-row';
+    const [type, label, note, key] = rowData;
+    
+    // Build Item Key dropdown options based on current cfgItems
+    const items = getEditorValue("cfgItems") || {};
+    let keyOptions = `<option value="">-- เลือกรายการ --</option>`;
+    for (const k of Object.keys(items)) {
+        keyOptions += `<option value="${escapeHtml(k)}" ${key === k ? 'selected' : ''}>${escapeHtml(k)}</option>`;
+    }
+    
+    const typeOptions = `
+        <option value="item" ${type==='item'?'selected':''}>🧾 Item (รายการ)</option>
+        <option value="header" ${type==='header'?'selected':''}>📁 Header (หัวข้อ)</option>
+        <option value="subtotal" ${type==='subtotal'?'selected':''}>🧮 Subtotal (รวมย่อย)</option>
+        <option value="spacer" ${type==='spacer'?'selected':''}>➖ Spacer (บรรทัดว่าง)</option>
+        <option value="grand_total" ${type==='grand_total'?'selected':''}>💰 Grand Total (รวมสุทธิ)</option>
+    `;
+
+    row.innerHTML = `
+        <div class="gui-sort-controls">
+            <button class="btn-sort" onclick="moveGuiRow(this, -1)" title="เลื่อนขึ้น">▲</button>
+            <button class="btn-sort" onclick="moveGuiRow(this, 1)" title="เลื่อนลง">▼</button>
+        </div>
+        <div class="gui-col" style="flex:1;">
+            <label>ประเภท (Type)</label>
+            <select class="gui-input struct-type" onchange="toggleKeyDropdown(this)">${typeOptions}</select>
+        </div>
+        <div class="gui-col" style="flex:2;">
+            <label>ชื่อบรรทัด (Label)</label>
+            <input type="text" class="gui-input struct-label" value="${escapeHtml(label)}" placeholder="เช่น รวมสินทรัพย์">
+        </div>
+        <div class="gui-col" style="flex:0.5;">
+            <label>หมายเหตุ</label>
+            <input type="text" class="gui-input struct-note" value="${escapeHtml(note)}" placeholder="Note">
+        </div>
+        <div class="gui-col" style="flex:2;">
+            <label>อ้างอิงรายการ (Key)</label>
+            <select class="gui-input struct-key" ${type !== 'item' ? 'disabled' : ''}>${keyOptions}</select>
+        </div>
+        <button class="btn-del" onclick="this.parentElement.remove(); syncGuiToJson();" title="ลบรายการ">❌</button>
+    `;
+    
+    // Auto sync on change
+    row.querySelectorAll('input, select').forEach(input => {
+        input.addEventListener('change', syncGuiToJson);
+    });
+    
+    return row;
+}
+
+function toggleKeyDropdown(selectElem) {
+    const keySelect = selectElem.parentElement.parentElement.querySelector('.struct-key');
+    if (selectElem.value === 'item') {
+        keySelect.disabled = false;
+    } else {
+        keySelect.disabled = true;
+        keySelect.value = "";
+    }
+}
+
+function addGuiStructureRow(id) {
+    document.getElementById(`gui${id.charAt(0).toUpperCase() + id.slice(1)}Container`).appendChild(createGuiStructureRow(id));
+    syncGuiToJson();
+}
+
+function moveGuiRow(btn, dir) {
+    const row = btn.parentElement.parentElement;
+    const parent = row.parentElement;
+    if (dir === -1 && row.previousElementSibling) {
+        parent.insertBefore(row, row.previousElementSibling);
+    } else if (dir === 1 && row.nextElementSibling) {
+        parent.insertBefore(row, row.nextElementSibling.nextElementSibling);
+    }
+    syncGuiToJson();
 }
