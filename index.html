@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="th" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GL & TB Reconciliation Tool — เครื่องมือกระทบยอด</title>
+    <meta name="description" content="เครื่องมือกระทบยอดบัญชีแยกประเภท (GL) กับงบทดลอง (TB) พร้อมสร้างงบการเงินอัตโนมัติ">
+    
+    <!-- Tabulator CSS -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/tabulator/6.2.1/css/tabulator_midnight.min.css" rel="stylesheet">
+
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- 1. TOP BAR -->
+        <div class="top-bar">
+            <div class="top-bar-left">
+                <h1>📊 GL & TB Reconciliation Tool</h1>
+                <span class="badge">HTML Version</span>
+            </div>
+            <button id="themeToggle" class="btn-icon" title="สลับธีม">🌙</button>
+        </div>
+
+        <div class="main-content">
+            <!-- 2. COMPANY INFO SECTION (collapsible) -->
+            <section class="collapsible open" id="companySection">
+                <div class="collapsible-header" onclick="this.parentElement.classList.toggle('open')">
+                    <h2>🏢 ข้อมูลบริษัท / Company Info</h2>
+                    <span class="collapsible-icon">▼</span>
+                </div>
+                <div class="collapsible-body">
+                    <div class="form-row">
+                        <div class="form-group" style="flex:3">
+                            <label for="companyName">ชื่อบริษัท</label>
+                            <input type="text" id="companyName" placeholder="บริษัท xxxxxxx จำกัด">
+                        </div>
+                        <div class="form-group" style="flex:1">
+                            <label for="currentYear">ปีปัจจุบัน</label>
+                            <input type="text" id="currentYear" value="พ.ศ. 2568">
+                        </div>
+                    </div>
+
+                    <hr>
+                    <h3>📊 ข้อมูลทุนเรือนหุ้น (Share Capital)</h3>
+                    <p class="text-muted">ข้อมูลนี้จะถูกนำไปจัดหน้าในส่วนของ 'ส่วนของเจ้าของ' ในงบฐานะการเงิน</p>
+
+                    <div class="form-row">
+                        <div class="form-group" style="flex:1">
+                            <h4>1. ทุนจดทะเบียน (Authorized Capital)</h4>
+                            <label for="regShares">จำนวนหุ้นจดทะเบียน (หุ้น)</label>
+                            <input type="number" id="regShares" value="10000" step="1000" min="0">
+                            <label for="regPar">มูลค่าจดทะเบียนหุ้นละ (บาท)</label>
+                            <input type="number" id="regPar" value="100" step="1" min="0">
+                            <div class="info-box" id="regCapitalInfo">💡 ทุนจดทะเบียนรวม: <strong>1,000,000.00</strong> บาท</div>
+                        </div>
+                        <div class="form-group" style="flex:1">
+                            <h4>2. ทุนที่ออกและเรียกชำระแล้ว (Paid-up Capital)</h4>
+                            <label for="paidShares">จำนวนหุ้นที่เรียกชำระ (หุ้น)</label>
+                            <input type="number" id="paidShares" value="10000" step="1000" min="0">
+                            <label for="paidPar">มูลค่าที่เรียกชำระแล้วหุ้นละ (บาท)</label>
+                            <input type="number" id="paidPar" value="25" step="1" min="0">
+                            <div class="success-box" id="paidCapitalInfo">💡 ทุนที่เรียกชำระแล้วรวม: <strong>250,000.00</strong> บาท</div>
+                        </div>
+                    </div>
+
+                    <hr>
+                    <div class="form-group">
+                        <label for="taxMethod">วิธีการคำนวณภาษีเงินได้นิติบุคคล</label>
+                        <select id="taxMethod">
+                            <option value="auto">Auto-Detect จากงบทดลอง (แนะนำ)</option>
+                            <option value="sme">SME (ยกเว้น 300k แรก, 15%-20%)</option>
+                            <option value="standard">Standard (20%)</option>
+                            <option value="manual">ไม่คำนวณอัตโนมัติ (Manual)</option>
+                        </select>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 3. FILE UPLOAD SECTION -->
+            <section class="config-section" style="padding: 1.5rem;">
+                <h2 style="font-size: 1.2rem; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem;">
+                    📁 อัปโหลดไฟล์สำหรับกระทบยอดปีปัจจุบัน
+                </h2>
+
+                <div class="upload-guide-banner">
+                    <span class="guide-icon">💡</span>
+                    <div>
+                        <strong>คำแนะนำการเตรียมไฟล์:</strong>
+                        <ul style="margin-top: 0.25rem; padding-left: 1.25rem;">
+                            <li><strong style="color: var(--accent-color);">ช่อง 1 (จำเป็น):</strong> ไฟล์งบทดลองสิ้นปี (TB) หรือกระดาษทำการ มียอดคงเหลือ ณ วันสิ้นปีสำหรับจัดทำงบการเงิน (`.xlsx`, `.xls`, `.pdf`)</li>
+                            <li><strong style="color: var(--accent-color);">ช่อง 2 (จำเป็น):</strong> ไฟล์บัญชีแยกประเภท (GL) PDF ออกจากโปรแกรมบัญชีเพื่อนำมาชนยอดเดบิต/เครดิต (`.pdf`)</li>
+                            <li><strong>ช่อง 3 (ไม่บังคับ):</strong> ไฟล์ PDF งบทดลองต้นปี ใช้สำหรับตรวจสอบยอดยกมา (Brought Forward) กับ GL กรณี GL แสดงยอดยกมาไม่ครบ</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="upload-section" id="uploadSection" style="margin-bottom: 0;">
+                    <div class="file-input-group">
+                        <label>
+                            📊 ช่องที่ 1: งบทดลองสิ้นปี (TB) / กระดาษทำการ
+                            <span class="badge-required">จำเป็น</span>
+                        </label>
+                        <div class="file-drop-zone" id="drop-tbFile">
+                            <input type="file" id="tbFile" accept=".xls,.xlsx,.pdf">
+                            <div class="drop-zone-icon">📊</div>
+                            <div class="drop-zone-prompt">
+                                <span><strong>ลากไฟล์มาวางที่นี่</strong></span>
+                                <span>หรือ <span class="browse-link">คลิกเพื่อเลือกไฟล์</span></span>
+                                <small class="text-muted">.xlsx, .xls, .pdf (มียอดคงเหลือสิ้นปี)</small>
+                            </div>
+                            <div class="file-status-badge">
+                                <span class="file-name-text"></span>
+                                <span class="file-size-text"></span>
+                                <button type="button" class="btn-clear-file" data-target="tbFile">✖ ยกเลิก / เลือกใหม่</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="file-input-group">
+                        <label>
+                            📑 ช่องที่ 2: บัญชีแยกประเภท (GL)
+                            <span class="badge-required">จำเป็น</span>
+                        </label>
+                        <div class="file-drop-zone" id="drop-glFile">
+                            <input type="file" id="glFile" accept=".pdf">
+                            <div class="drop-zone-icon">📑</div>
+                            <div class="drop-zone-prompt">
+                                <span><strong>ลากไฟล์มาวางที่นี่</strong></span>
+                                <span>หรือ <span class="browse-link">คลิกเพื่อเลือกไฟล์</span></span>
+                                <small class="text-muted">GL PDF จากโปรแกรมบัญชี (เช่น Express)</small>
+                            </div>
+                            <div class="file-status-badge">
+                                <span class="file-name-text"></span>
+                                <span class="file-size-text"></span>
+                                <button type="button" class="btn-clear-file" data-target="glFile">✖ ยกเลิก / เลือกใหม่</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="file-input-group">
+                        <label>
+                            🔍 ช่องที่ 3: งบทดลองยอดยกมาต้นปี (BF Check)
+                            <span class="badge-optional">ไม่บังคับ</span>
+                        </label>
+                        <div class="file-drop-zone" id="drop-tbPdfFile">
+                            <input type="file" id="tbPdfFile" accept=".pdf">
+                            <div class="drop-zone-icon">🔍</div>
+                            <div class="drop-zone-prompt">
+                                <span><strong>ลากไฟล์มาวางที่นี่</strong></span>
+                                <span>หรือ <span class="browse-link">คลิกเพื่อเลือกไฟล์</span></span>
+                                <small class="text-muted">PDF ตรวจยอดยกมาต้นปี (ถ้ามี)</small>
+                            </div>
+                            <div class="file-status-badge">
+                                <span class="file-name-text"></span>
+                                <span class="file-size-text"></span>
+                                <button type="button" class="btn-clear-file" data-target="tbPdfFile">✖ ยกเลิก / เลือกใหม่</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Prior Year Upload (collapsible) -->
+            <section class="collapsible" id="priorYearSection">
+                <div class="collapsible-header" onclick="this.parentElement.classList.toggle('open')">
+                    <h2>📊 อัปโหลดข้อมูลปีก่อนหน้า (สำหรับงบเปรียบเทียบ)</h2>
+                    <span class="collapsible-icon">▼</span>
+                </div>
+                <div class="collapsible-body">
+                    <div class="form-row">
+                        <div class="form-group" style="flex:1">
+                            <label for="priorYear">ปีก่อนหน้า</label>
+                            <input type="text" id="priorYear" value="พ.ศ. 2567">
+                        </div>
+                        <div class="form-group" style="flex:1">
+                            <label for="priorUploadMode">ประเภทไฟล์</label>
+                            <select id="priorUploadMode">
+                                <option value="working_paper">กระดาษทำการ (Working Paper)</option>
+                                <option value="fs">งบการเงิน (FS)</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="flex:2">
+                            <label>อัปโหลดไฟล์ปีก่อนหน้า</label>
+                            <div class="file-drop-zone" id="drop-priorFile">
+                                <input type="file" id="priorFile" accept=".xls,.xlsx,.pdf">
+                                <div class="drop-zone-icon">📂</div>
+                                <div class="drop-zone-prompt">
+                                    <span><strong>ลากไฟล์มาวางที่นี่</strong></span>
+                                    <span>หรือ <span class="browse-link">คลิกเพื่อเลือกไฟล์</span></span>
+                                    <small class="text-muted">.xls, .xlsx, .pdf</small>
+                                </div>
+                                <div class="file-status-badge">
+                                    <span class="file-name-text"></span>
+                                    <span class="file-size-text"></span>
+                                    <button type="button" class="btn-clear-file" data-target="priorFile">✖ ยกเลิก / เลือกใหม่</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 4. ACTION SECTION -->
+            <div class="action-section">
+                <button id="runBtn" class="btn btn-primary">▶ เริ่มกระทบยอด (Run Reconciliation)</button>
+                <div id="loading" class="hidden">
+                    <div class="spinner"></div>
+                    <span>กำลังประมวลผลไฟล์... กรุณารอสักครู่</span>
+                </div>
+            </div>
+
+            <!-- 5. RESULTS AREA -->
+            <div id="resultsArea" class="hidden">
+                <!-- Summary Cards -->
+                <div class="summary-cards">
+                    <div class="card">
+                        <h3>บัญชีทั้งหมด</h3>
+                        <p id="sumTotal">0</p>
+                    </div>
+                    <div class="card card--success">
+                        <h3>บัญชีที่ตรงกัน</h3>
+                        <p id="sumMatched">0</p>
+                    </div>
+                    <div class="card card--warning">
+                        <h3>ยอดไม่ตรง</h3>
+                        <p id="sumMismatches">0</p>
+                    </div>
+                    <div class="card card--danger">
+                        <h3>บัญชีที่ขาดหาย</h3>
+                        <p id="sumMissing">0</p>
+                    </div>
+                </div>
+
+                <!-- 6. TAB NAVIGATION -->
+                <div class="tabs">
+                    <button class="tab-btn active" data-target="tab-discrepancies">⚠️ ยอดไม่ตรง (<span id="countMismatches">0</span>)</button>
+                    <button class="tab-btn" data-target="tab-missing">❌ ขาดหาย (<span id="countMissing">0</span>)</button>
+                    <button class="tab-btn" data-target="tab-suspects">🔍 10 อันดับน่าสงสัย</button>
+                    <button class="tab-btn" data-target="tab-matches">✅ ตรงกัน (<span id="countMatches">0</span>)</button>
+                    <button class="tab-btn" data-target="tab-mapping">🗂️ จัดประเภท FS</button>
+                    <button class="tab-btn" data-target="tab-export">📥 ส่งออกรายงาน</button>
+                    <button class="tab-btn" data-target="tab-config">⚙️ Configuration</button>
+                </div>
+
+                <!-- 7. TAB CONTENT -->
+                <div class="tab-content">
+                    <!-- Discrepancies Tab -->
+                    <div id="tab-discrepancies" class="tab-pane active">
+                        <p>บัญชีที่มียอดไม่ตรงกันระหว่าง GL และ TB</p>
+                        <div id="grid-discrepancies" class="data-grid"></div>
+                    </div>
+
+                    <!-- Missing Tab -->
+                    <div id="tab-missing" class="tab-pane">
+                        <h3>❌ ขาดหายใน GL</h3>
+                        <div id="grid-missing-gl" class="data-grid"></div>
+                        <h3 class="mt-2">❌ ขาดหายใน TB</h3>
+                        <div id="grid-missing-tb" class="data-grid"></div>
+                    </div>
+
+                    <!-- Suspects Tab -->
+                    <div id="tab-suspects" class="tab-pane">
+                        <p>10 อันดับบัญชีที่มียอดคงเหลือสูงสุด</p>
+                        <div id="grid-suspects" class="data-grid"></div>
+                    </div>
+
+                    <!-- Matches Tab -->
+                    <div id="tab-matches" class="tab-pane">
+                        <p>บัญชีที่ยอดตรงกันทุกประการ</p>
+                        <div id="grid-matches" class="data-grid"></div>
+                    </div>
+
+                    <!-- FS Mapping Tab -->
+                    <div id="tab-mapping" class="tab-pane">
+                        <h3>🗂️ Master FS Mapping & Verification</h3>
+                        <p>ตรวจสอบการจัดประเภทรายการงบการเงิน — สามารถแก้ไขได้โดยตรงในตาราง</p>
+                        <div class="info-box">ระบบจัดประเภทอัตโนมัติจากรหัสบัญชีและชื่อบัญชีตาม Config กรุณาตรวจสอบและแก้ไขรายการ "ไม่จัดประเภท" ก่อนส่งออก</div>
+
+                        <div id="taxInfoArea"></div>
+
+                        <div style="display:flex;gap:1.5rem;margin-top:1rem;">
+                            <div style="flex:7;">
+                                <h4>📝 Detailed Account Mapping</h4>
+                                <div id="grid-mapping" class="data-grid"></div>
+                            </div>
+                            <div style="flex:3;">
+                                <h4>📈 Live FS Summary</h4>
+                                <div id="fsSummaryArea"></div>
+                            </div>
+                        </div>
+
+                        <hr class="mt-2 mb-2">
+                        <h3>📑 Interactive Financial Statements Preview</h3>
+                        <p>ตรวจสอบโครงสร้างงบการเงิน — คลิกที่รายการเพื่อดูบัญชีย่อย</p>
+
+                        <!-- FS Preview Sub-tabs -->
+                        <div class="sub-tabs">
+                            <button class="sub-tab-btn active" data-target="subtab-bs">🏛️ งบฐานะการเงิน (BS)</button>
+                            <button class="sub-tab-btn" data-target="subtab-pl">📈 งบกำไรขาดทุน (PL)</button>
+                            <button class="sub-tab-btn" data-target="subtab-eq">⚖️ งบส่วนของเจ้าของ (EQ)</button>
+                        </div>
+                        <div class="sub-tab-content">
+                            <div id="subtab-bs" class="tab-pane active">
+                                <div id="bsPreviewArea"></div>
+                            </div>
+                            <div id="subtab-pl" class="tab-pane">
+                                <div id="plPreviewArea"></div>
+                            </div>
+                            <div id="subtab-eq" class="tab-pane">
+                                <div id="eqPreviewArea"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Export Tab -->
+                    <div id="tab-export" class="tab-pane">
+                        <h3>📥 ส่งออกรายงาน</h3>
+                        <p>ดาวน์โหลดข้อมูลกระทบยอดหรือสร้างงบการเงินฉบับสมบูรณ์</p>
+                        <div class="export-actions">
+                            <div class="export-box">
+                                <h4>📋 Reconciliation Report</h4>
+                                <p>รายงานกระทบยอดครบทุก sheet (All Accounts, Discrepancies, Missing, Suspects)</p>
+                                <button id="exportReconBtn" class="btn btn-secondary">📥 ดาวน์โหลดรายงานกระทบยอด (.xlsx)</button>
+                            </div>
+                            <div class="export-box">
+                                <h4>📊 Financial Statements</h4>
+                                <p>งบการเงินฉบับสมบูรณ์ตาม TFRS (งบดุล + งบกำไรขาดทุน + งบส่วนของเจ้าของ)</p>
+                                <button id="exportFsBtn" class="btn btn-primary">📊 ดาวน์โหลดงบการเงิน (.xlsx)</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Config Tab -->
+                    <div id="tab-config" class="tab-pane">
+                        <h3>⚙️ FS Configuration Manager</h3>
+                        <p id="configSourceInfo">📍 Config source: <strong>default</strong></p>
+
+                        <!-- Legend (collapsible) -->
+                        <section class="collapsible" id="legendSection">
+                            <div class="collapsible-header" onclick="this.parentElement.classList.toggle('open')">
+                                <h4>📖 Legend — คำอธิบายคำย่อและโครงสร้าง</h4>
+                                <span class="collapsible-icon">▼</span>
+                            </div>
+                            <div class="collapsible-body">
+                                <div class="form-row">
+                                    <div style="flex:1">
+                                        <h5>📊 Financial Statement Abbreviations</h5>
+                                        <ul>
+                                            <li><strong>FS</strong> — Financial Statements (งบการเงิน)</li>
+                                            <li><strong>BS</strong> — Balance Sheet (งบฐานะการเงิน)</li>
+                                            <li><strong>PL</strong> — Profit & Loss (งบกำไรขาดทุน)</li>
+                                            <li><strong>EQ</strong> — Statement of Changes in Equity</li>
+                                            <li><strong>GL</strong> — General Ledger (บัญชีแยกประเภท)</li>
+                                            <li><strong>TB</strong> — Trial Balance (งบทดลอง)</li>
+                                            <li><strong>BF</strong> — Brought Forward (ยอดยกมา)</li>
+                                        </ul>
+                                    </div>
+                                    <div style="flex:1">
+                                        <h5>🔧 Config Field Reference</h5>
+                                        <ul>
+                                            <li><strong>bs_debit</strong> — สินทรัพย์ (FS Value = BS Debit − BS Credit)</li>
+                                            <li><strong>bs_credit</strong> — หนี้สิน/ทุน (FS Value = BS Credit − BS Debit)</li>
+                                            <li><strong>pl_debit</strong> — ค่าใช้จ่าย (FS Value = PL Debit − PL Credit)</li>
+                                            <li><strong>pl_credit</strong> — รายได้ (FS Value = PL Credit − PL Debit)</li>
+                                        </ul>
+                                        <h5>📐 Structure Row Types</h5>
+                                        <ul>
+                                            <li><strong>header</strong> — แถวหัวข้อ (ไม่มีตัวเลข)</li>
+                                            <li><strong>item</strong> — แถวรายการ</li>
+                                            <li><strong>subtotal</strong> — แถวรวมย่อย</li>
+                                            <li><strong>spacer</strong> — แถวว่าง</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <hr>
+
+                        <!-- JSON Editors -->
+                        <h4>1️⃣ FS Line Items — Mapping Rules (fs_line_items)</h4>
+                        <p class="text-muted">แต่ละ key = ชื่อรายการในงบการเงิน, value = {prefixes, keywords, side}</p>
+                        <textarea id="cfgItems" class="json-editor" rows="20"></textarea>
+
+                        <hr>
+                        <div class="form-row">
+                            <div style="flex:1">
+                                <h4>2️⃣ BS Structure — งบฐานะการเงิน</h4>
+                                <p class="text-muted">แต่ละแถว = [type, label, note, key]</p>
+                                <textarea id="cfgBs" class="json-editor" rows="20"></textarea>
+                            </div>
+                            <div style="flex:1">
+                                <h4>3️⃣ PL Structure — งบกำไรขาดทุน</h4>
+                                <p class="text-muted">แต่ละแถว = [type, label, note, key]</p>
+                                <textarea id="cfgPl" class="json-editor" rows="20"></textarea>
+                            </div>
+                        </div>
+
+                        <hr>
+                        <h4>4️⃣ EQ Structure — งบส่วนของเจ้าของ</h4>
+                        <textarea id="cfgEq" class="json-editor" rows="15"></textarea>
+
+                        <hr>
+                        <h4>🎛️ Actions</h4>
+                        <div class="config-actions">
+                            <button id="cfgDeployBtn" class="btn btn-primary">🚀 Deploy & Apply</button>
+                            <label class="btn btn-secondary" for="cfgImportFile">📂 Load from File
+                                <input type="file" id="cfgImportFile" accept=".json" style="display:none">
+                            </label>
+                            <button id="cfgExportBtn" class="btn btn-secondary">💾 Export Config</button>
+                            <button id="cfgResetBtn" class="btn btn-danger">🔄 Reset Default</button>
+                        </div>
+                        <div id="cfgValidationResults"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast"></div>
+
+    <!-- PDF.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+    </script>
+
+    <!-- SheetJS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+    <!-- ExcelJS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
+
+    <!-- Tabulator -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tabulator/6.2.1/js/tabulator.min.js"></script>
+
+    <!-- App Logic -->
+    <script src="app.js"></script>
+</body>
+</html>
